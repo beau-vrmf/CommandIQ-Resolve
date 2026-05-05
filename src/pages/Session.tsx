@@ -13,6 +13,7 @@ export function Session() {
   const active = useSession((s) => s.active)
   const answer = useSession((s) => s.answer)
   const completeTerminal = useSession((s) => s.completeTerminal)
+  const goBack = useSession((s) => s.goBack)
   const setNote = useSession((s) => s.setNoteOnCurrent)
   const addPhoto = useSession((s) => s.addPhotoToCurrent)
   const pause = useSession((s) => s.pause)
@@ -74,25 +75,59 @@ export function Session() {
     }
   }
 
-  const onMarkComplete = async () => {
+  const finalizeTerminal = async (outcomeOverride?: { kind: 'resolved' | 'escalate'; message: string }) => {
     pause()
-    const kind = block.terminalKind ?? 'resolved'
-    completeTerminal(block.id, { kind, message: block.text })
+    const outcome =
+      outcomeOverride ?? { kind: block.terminalKind ?? 'resolved', message: block.text }
+    completeTerminal(block.id, outcome)
     const snapshot = useSession.getState().active
     if (snapshot) await archiveSession(snapshot)
     navigate('/outcome', { replace: true })
   }
 
+  const onFixWorked = () => finalizeTerminal({ kind: 'resolved', message: block.text })
+  const onFixFailed = () =>
+    finalizeTerminal({
+      kind: 'escalate',
+      message: `Documented fix did not resolve the issue. Escalate to next-level troubleshooting. Original step: ${block.text}`,
+    })
+  const onAcknowledgeEscalate = () => finalizeTerminal()
+
+  const onBack = () => {
+    if (active.steps.length < 2) return
+    const hasContent = !!step?.note || (step?.photoIds.length ?? 0) > 0
+    if (hasContent) {
+      const ok = confirm(
+        'Going back will discard the note and any photos attached to this block. Continue?',
+      )
+      if (!ok) return
+    }
+    goBack()
+  }
+
   const terminal = isTerminal(block)
+  const canGoBack = active.steps.length >= 2
 
   return (
     <div className="flex-1 flex flex-col max-w-3xl w-full mx-auto">
       <div className="sticky top-0 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
-        <div className="flex flex-col">
-          <span className="text-xs uppercase tracking-wide text-slate-400">
-            Fault {active.faultCode} · Fig {block.figure} · Sheet {block.sheet}
-          </span>
-          <span className="text-base font-semibold">Block {block.blockNumber}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          {canGoBack && (
+            <button
+              onClick={onBack}
+              aria-label="Go back to the previous block"
+              className="shrink-0 px-2.5 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium"
+              title="Go back to previous block"
+            >
+              ← Back
+            </button>
+          )}
+          <div className="flex flex-col min-w-0">
+            <span className="text-xs uppercase tracking-wide text-slate-400 truncate">
+              Fault {active.faultCode} · Fig {block.figure} · Sheet {block.sheet}
+            </span>
+            <span className="text-base font-semibold">Block {block.blockNumber}</span>
+          </div>
         </div>
         <Timer />
         <button
@@ -173,17 +208,33 @@ export function Session() {
       </div>
 
       <div className="sticky bottom-0 bg-slate-950/95 backdrop-blur border-t border-slate-800 px-4 py-4">
-        {terminal ? (
+        {terminal && block.terminalKind === 'escalate' ? (
           <button
-            onClick={onMarkComplete}
-            className={`w-full py-6 rounded-xl text-white text-2xl font-bold shadow-lg ${
-              block.terminalKind === 'escalate'
-                ? 'bg-amber-700 hover:bg-amber-600'
-                : 'bg-emerald-700 hover:bg-emerald-600'
-            }`}
+            onClick={onAcknowledgeEscalate}
+            className="w-full py-6 rounded-xl bg-amber-700 hover:bg-amber-600 text-white text-2xl font-bold shadow-lg"
           >
-            {block.terminalKind === 'escalate' ? 'Acknowledge & escalate' : 'Mark fix complete'}
+            Acknowledge & escalate
           </button>
+        ) : terminal ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-center text-sm font-medium text-slate-200">
+              Did this correct the issue?
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={onFixFailed}
+                className="py-5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-lg font-bold shadow-lg"
+              >
+                No — escalate
+              </button>
+              <button
+                onClick={onFixWorked}
+                className="py-5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-lg font-bold shadow-lg"
+              >
+                Yes — fix worked
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <button

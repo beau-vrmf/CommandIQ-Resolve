@@ -28,6 +28,7 @@ type SessionState = {
   startSession: (faultCode: string, entryBlockId: string) => void
   answer: (blockId: string, answer: 'yes' | 'no', next: string | Outcome | undefined) => void
   completeTerminal: (blockId: string, outcome: Outcome) => void
+  goBack: () => void
   setNoteOnCurrent: (note: string) => void
   addPhotoToCurrent: (photoId: string) => void
   removePhotoFromCurrent: (photoId: string) => void
@@ -99,6 +100,23 @@ export const useSession = create<SessionState>()(
             },
           })
         }
+      },
+      goBack: () => {
+        const a = get().active
+        if (!a || a.steps.length < 2) return
+        // Drop the current block visit (and any notes/photos attached to it),
+        // then clear the previous step's YES/NO answer so the user can re-pick.
+        const newSteps = a.steps.slice(0, -1)
+        const lastIdx = newSteps.length - 1
+        newSteps[lastIdx] = { ...newSteps[lastIdx], answer: null, answeredAt: null }
+        set({
+          active: {
+            ...a,
+            steps: newSteps,
+            currentBlockId: newSteps[lastIdx].blockId,
+            outcome: null, // in case we somehow had a terminal outcome staged
+          },
+        })
       },
       completeTerminal: (blockId, outcome) => {
         const a = get().active

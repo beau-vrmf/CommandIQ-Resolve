@@ -176,3 +176,94 @@ describe('FI tree navigation — Sheet 19 / Sheet 21 cross-sheet jumps', () => {
     expect(b63.cautions).toEqual(['Keep pitchlock time to a minimum.'])
   })
 })
+
+describe('FI tree navigation — Back button (goBack)', () => {
+  beforeEach(() => {
+    useSession.setState({ active: null })
+  })
+
+  it('does nothing when only the entry step exists', () => {
+    const { startSession, goBack } = useSession.getState()
+    startSession('6110004', B47)
+    const before = useSession.getState().active!
+    goBack()
+    const after = useSession.getState().active!
+    expect(after.steps).toHaveLength(1)
+    expect(after.currentBlockId).toBe(before.currentBlockId)
+  })
+
+  it('pops the current block visit and clears the previous answer', () => {
+    const { startSession, answer, goBack } = useSession.getState()
+    startSession('6110004', B47)
+    answer(B47, 'yes', getBlock(B47)!.onYes)
+    let a = useSession.getState().active!
+    expect(a.currentBlockId).toBe(B50)
+    expect(a.steps[0].answer).toBe('yes')
+
+    goBack()
+    a = useSession.getState().active!
+    expect(a.currentBlockId).toBe(B47)
+    expect(a.steps).toHaveLength(1)
+    expect(a.steps[0].answer).toBeNull()
+  })
+
+  it('discards notes/photos on the current block when going back', () => {
+    const { startSession, answer, setNoteOnCurrent, addPhotoToCurrent, goBack } =
+      useSession.getState()
+    startSession('6110005', B52)
+    answer(B52, 'yes', getBlock(B52)!.onYes) // → 53
+    setNoteOnCurrent('test note on 53')
+    addPhotoToCurrent('p1')
+    let a = useSession.getState().active!
+    expect(a.steps[1].note).toBe('test note on 53')
+    expect(a.steps[1].photoIds).toEqual(['p1'])
+
+    goBack()
+    a = useSession.getState().active!
+    expect(a.currentBlockId).toBe(B52)
+    expect(a.steps).toHaveLength(1)
+    expect(a.steps[0].answer).toBeNull()
+  })
+
+  it('preserves notes/photos on the prior step after going back', () => {
+    const { startSession, setNoteOnCurrent, answer, goBack } = useSession.getState()
+    startSession('6110004', B47)
+    setNoteOnCurrent('observed something on 47')
+    answer(B47, 'yes', getBlock(B47)!.onYes) // → 50
+
+    goBack()
+    const a = useSession.getState().active!
+    expect(a.currentBlockId).toBe(B47)
+    expect(a.steps[0].note).toBe('observed something on 47')
+    expect(a.steps[0].answer).toBeNull()
+  })
+})
+
+describe('FI tree navigation — terminal verification', () => {
+  beforeEach(() => {
+    useSession.setState({ active: null })
+  })
+
+  it('"Yes — fix worked" produces a resolved outcome', () => {
+    const { startSession, answer, completeTerminal } = useSession.getState()
+    startSession('6110004', B47)
+    answer(B47, 'yes', getBlock(B47)!.onYes) // → 50
+
+    const b50 = getBlock(B50)!
+    completeTerminal(B50, { kind: 'resolved', message: b50.text })
+    expect(useSession.getState().active?.outcome?.kind).toBe('resolved')
+  })
+
+  it('"No — fix didn\'t work" escalates a resolved-terminal block', () => {
+    const { startSession, answer, completeTerminal } = useSession.getState()
+    startSession('6110004', B47)
+    answer(B47, 'yes', getBlock(B47)!.onYes) // → 50 (terminal: resolved)
+
+    const b50 = getBlock(B50)!
+    const failMsg = `Documented fix did not resolve the issue. Escalate to next-level troubleshooting. Original step: ${b50.text}`
+    completeTerminal(B50, { kind: 'escalate', message: failMsg })
+    const a = useSession.getState().active!
+    expect(a.outcome?.kind).toBe('escalate')
+    expect(a.outcome?.message).toContain('Documented fix did not resolve the issue')
+  })
+})
