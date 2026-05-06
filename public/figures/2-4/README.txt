@@ -1,4 +1,5 @@
 TO source page images for Figure 2-4 (Propeller Assembly Malfunction).
+(Project hosted on Vercel under the moth-and-flame-vr Pro team.)
 
 Naming convention: sht-<sheetNumber>.png  (or .jpg / .jpeg / .webp)
 
