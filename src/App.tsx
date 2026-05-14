@@ -8,7 +8,7 @@ export function App() {
       {showHeader && (
         <header className="bg-slate-950 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
           <Link to="/" className="text-lg font-semibold tracking-tight">
-            Tribal Knowledge
+            CommandIQ Resolve
           </Link>
           <Link
             to="/history"
