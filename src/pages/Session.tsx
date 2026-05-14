@@ -22,6 +22,7 @@ export function Session() {
 
   const [noteOpen, setNoteOpen] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [progressOpen, setProgressOpen] = useState(false)
 
   useEffect(() => {
     if (!active) {
@@ -153,15 +154,25 @@ export function Session() {
           </div>
         </div>
         <Timer />
-        <button
-          onClick={() => {
-            pause()
-            navigate('/', { replace: true })
-          }}
-          className="text-sm text-slate-300 hover:text-white px-3 py-1.5 rounded-md hover:bg-slate-800"
-        >
-          Pause & exit
-        </button>
+        <div className="flex items-center gap-1">
+          {active.steps.some((s) => s.answer !== null) && (
+            <button
+              onClick={() => setProgressOpen(true)}
+              className="text-sm text-slate-300 hover:text-white px-3 py-1.5 rounded-md hover:bg-slate-800"
+            >
+              Progress
+            </button>
+          )}
+          <button
+            onClick={() => {
+              pause()
+              navigate('/', { replace: true })
+            }}
+            className="text-sm text-slate-300 hover:text-white px-3 py-1.5 rounded-md hover:bg-slate-800"
+          >
+            Pause & exit
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col gap-4 px-4 py-5">
@@ -282,6 +293,63 @@ export function Session() {
         onClose={() => setNoteOpen(false)}
         onSave={(note) => setNote(note)}
       />
+
+      {progressOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/95 flex flex-col max-w-3xl mx-auto">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+            <h2 className="text-base font-semibold">Progress — Fault {active.faultCode}</h2>
+            <button
+              onClick={() => setProgressOpen(false)}
+              className="text-white text-xl px-3 py-1 rounded hover:bg-slate-800"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <ol className="space-y-2">
+              {active.steps
+                .filter((s) => s.answer !== null)
+                .map((s, i) => {
+                  const b = getBlock(s.blockId)
+                  return (
+                    <li key={i} className="bg-slate-800 rounded-lg p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-slate-300">
+                          {b ? `Sheet ${b.sheet} · Block ${b.blockNumber}` : `Block ${s.blockId}`}
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded ${
+                            s.answer === 'yes'
+                              ? 'bg-emerald-700 text-emerald-50'
+                              : 'bg-rose-700 text-rose-50'
+                          }`}
+                        >
+                          {s.answer!.toUpperCase()}
+                        </span>
+                      </div>
+                      {b && (
+                        <p className="text-sm text-slate-300 mt-1 line-clamp-3 whitespace-pre-wrap">
+                          {b.text}
+                        </p>
+                      )}
+                      {s.note && (
+                        <p className="text-sm italic text-slate-200 mt-2 border-l-2 border-slate-600 pl-3">
+                          {s.note}
+                        </p>
+                      )}
+                      {s.photoIds.length > 0 && (
+                        <p className="text-xs text-slate-400 mt-1">
+                          📷 {s.photoIds.length} photo{s.photoIds.length === 1 ? '' : 's'} attached
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
+            </ol>
+          </div>
+        </div>
+      )}
 
       {block.imageRef && (
         <Lightbox
