@@ -7,6 +7,7 @@ import { Timer } from '../components/Timer'
 import { NoteDialog } from '../components/NoteDialog'
 import { CameraCapture } from '../components/CameraCapture'
 import { Lightbox } from '../components/Lightbox'
+import type { VisitedBlock } from '../components/Lightbox'
 
 export function Session() {
   const navigate = useNavigate()
@@ -61,6 +62,28 @@ export function Session() {
 
   const step = currentStep(active)
   const photoCount = step?.photoIds.length ?? 0
+
+  // All answered steps (excluding the current unanswered one) mapped to VisitedBlock.
+  // sessionNotes spans all sheets for the notes panel.
+  // visitedBlocks is filtered to the current sheet for the SVG overlay.
+  const sessionNotes: VisitedBlock[] = active.steps
+    .filter((s) => s.answer !== null)
+    .map((s): VisitedBlock | null => {
+      const b = getBlock(s.blockId)
+      if (!b) return null
+      return {
+        blockId: s.blockId,
+        blockNumber: b.blockNumber,
+        sheet: b.sheet,
+        answer: s.answer,
+        hasNote: !!s.note,
+        note: s.note,
+        bbox: b.bbox,
+      }
+    })
+    .filter((e): e is VisitedBlock => e !== null)
+
+  const visitedBlocks = sessionNotes.filter((e) => e.sheet === block.sheet)
 
   const onAnswer = async (ans: 'yes' | 'no') => {
     const next = ans === 'yes' ? block.onYes : block.onNo
@@ -266,6 +289,8 @@ export function Session() {
           src={block.imageRef}
           alt={`TO ${block.technicalOrder} · Fig ${block.figure} · Sheet ${block.sheet}`}
           onClose={() => setLightboxOpen(false)}
+          visitedBlocks={visitedBlocks}
+          sessionNotes={sessionNotes}
         />
       )}
     </div>
