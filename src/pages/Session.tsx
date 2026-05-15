@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getBlock, isTerminal } from '../data/fi-tree'
 import { currentStep, useSession } from '../store/session'
 import { archiveSession } from '../db/sessions'
+import { syncSession } from '../db/sync'
 import { Timer } from '../components/Timer'
 import { NoteDialog } from '../components/NoteDialog'
 import { CameraCapture } from '../components/CameraCapture'
@@ -86,7 +87,10 @@ export function Session() {
     answer(block.id, ans, next)
     if (typeof next !== 'string') {
       const snapshot = useSession.getState().active
-      if (snapshot) await archiveSession(snapshot)
+      if (snapshot) {
+        await archiveSession(snapshot)
+        syncSession(snapshot).catch(console.error)
+      }
       navigate('/outcome', { replace: true })
     } else {
       resume()
@@ -99,7 +103,10 @@ export function Session() {
       outcomeOverride ?? { kind: block.terminalKind ?? 'resolved', message: block.text }
     completeTerminal(block.id, outcome)
     const snapshot = useSession.getState().active
-    if (snapshot) await archiveSession(snapshot)
+    if (snapshot) {
+      await archiveSession(snapshot)
+      syncSession(snapshot).catch(console.error)
+    }
     navigate('/outcome', { replace: true })
   }
 
