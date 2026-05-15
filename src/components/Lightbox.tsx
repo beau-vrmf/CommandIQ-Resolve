@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import type { BBox } from '../data/fi-tree'
 
 export type VisitedBlock = {
   blockId: string
@@ -8,7 +7,6 @@ export type VisitedBlock = {
   answer: 'yes' | 'no' | null
   hasNote: boolean
   note?: string
-  bbox?: BBox
 }
 
 type Props = {
@@ -16,7 +14,6 @@ type Props = {
   alt: string
   open: boolean
   onClose: () => void
-  visitedBlocks?: VisitedBlock[] // blocks on current sheet only → SVG highlights
   sessionNotes?: VisitedBlock[]  // all answered steps → notes panel
 }
 
@@ -31,7 +28,7 @@ type Props = {
  * rectangles over the block number labels the technician has already answered.
  * When sessionNotes are provided, a collapsible notes panel lists all steps.
  */
-export function Lightbox({ src, alt, open, onClose, visitedBlocks, sessionNotes }: Props) {
+export function Lightbox({ src, alt, open, onClose, sessionNotes }: Props) {
   const [zoomed, setZoomed] = useState(false)
   const [errored, setErrored] = useState(false)
   const [notesOpen, setNotesOpen] = useState(false)
@@ -147,50 +144,20 @@ export function Lightbox({ src, alt, open, onClose, visitedBlocks, sessionNotes 
             <p className="text-xs text-slate-500 mt-3 font-mono">{src}</p>
           </div>
         ) : (
-          // Wrapper is relative so the SVG overlay can be absolutely positioned
-          // over the image. CSS scale() on the img transforms the entire wrapper,
-          // keeping highlights aligned at any zoom level.
-          <div className="relative inline-block">
-            <img
-              src={src}
-              alt={alt}
-              onError={() => setErrored(true)}
-              onClick={() => setZoomed((z) => !z)}
-              className={`block max-w-none transition-transform duration-150 select-none ${
-                zoomed ? 'scale-200 cursor-zoom-out' : 'cursor-zoom-in'
-              }`}
-              style={{
-                maxHeight: zoomed ? 'none' : '90vh',
-                maxWidth: zoomed ? 'none' : '95vw',
-              }}
-              draggable={false}
-            />
-            {/* SVG highlight overlay — viewBox 0 0 1 1 so bbox fractions map
-                directly to SVG coordinates with no runtime math */}
-            {visitedBlocks && visitedBlocks.some((vb) => vb.bbox) && (
-              <svg
-                aria-hidden
-                className="absolute inset-0 w-full h-full pointer-events-none"
-                viewBox="0 0 1 1"
-                preserveAspectRatio="none"
-              >
-                {visitedBlocks.map((vb) =>
-                  vb.bbox ? (
-                    <rect
-                      key={vb.blockId}
-                      x={vb.bbox.x}
-                      y={vb.bbox.y}
-                      width={vb.bbox.w}
-                      height={vb.bbox.h}
-                      fill="rgba(34,197,94,0.35)"
-                      stroke="rgba(34,197,94,0.85)"
-                      strokeWidth="0.003"
-                    />
-                  ) : null
-                )}
-              </svg>
-            )}
-          </div>
+          <img
+            src={src}
+            alt={alt}
+            onError={() => setErrored(true)}
+            onClick={() => setZoomed((z) => !z)}
+            className={`block max-w-none transition-transform duration-150 select-none ${
+              zoomed ? 'scale-200 cursor-zoom-out' : 'cursor-zoom-in'
+            }`}
+            style={{
+              maxHeight: zoomed ? 'none' : '90vh',
+              maxWidth: zoomed ? 'none' : '95vw',
+            }}
+            draggable={false}
+          />
         )}
       </div>
     </div>
