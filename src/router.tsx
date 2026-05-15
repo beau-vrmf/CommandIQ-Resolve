@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { App } from './App'
+import { Landing } from './pages/Landing'
 import { FaultCodeList } from './pages/FaultCodeList'
 import { Session } from './pages/Session'
 import { Outcome } from './pages/Outcome'
@@ -10,7 +11,8 @@ export const router = createBrowserRouter([
     path: '/',
     element: <App />,
     children: [
-      { index: true, element: <FaultCodeList /> },
+      { index: true, element: <Landing /> },
+      { path: 'resolve', element: <FaultCodeList /> },
       { path: 'session', element: <Session /> },
       { path: 'outcome', element: <Outcome /> },
       { path: 'history', element: <History /> },
