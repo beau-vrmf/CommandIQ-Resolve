@@ -26,6 +26,7 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
   const [responses, setResponses] = useState<Map<string, OjtSubmissionStep>>(new Map())
   const [photoPreviewUrls, setPhotoPreviewUrls] = useState<Map<string, string>>(new Map())
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [photoError, setPhotoError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [confirmed, setConfirmed] = useState(false)  // brief flash before auto-advance
   const [showImage, setShowImage] = useState(false)
@@ -52,10 +53,11 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
   const isLastStep = currentIndex === steps.length - 1
   const totalSteps = steps.length
 
-  // Resolve signed URL for step reference image
+  // Resolve signed URL for step reference image; clear photo error on step change
   useEffect(() => {
     setImageUrl(null)
     setShowImage(false)
+    setPhotoError(null)
     if (step?.image_path) {
       getSignedUrl(step.image_path).then(setImageUrl).catch(console.error)
     }
@@ -127,10 +129,11 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
     const file = e.target.files?.[0]
     if (!file || !step) return
     setUploadingPhoto(true)
+    setPhotoError(null)
+    // Show local preview immediately — this also unlocks the confirmation buttons
+    const localUrl = URL.createObjectURL(file)
+    setPhotoPreviewUrls((prev) => new Map(prev).set(step.id, localUrl))
     try {
-      // Show local preview immediately
-      const localUrl = URL.createObjectURL(file)
-      setPhotoPreviewUrls((prev) => new Map(prev).set(step.id, localUrl))
       await uploadStepPhoto(submission.id, step.id, file)
       const updated = new Map(responses)
       const existing = responses.get(step.id)
@@ -150,6 +153,9 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
         photo_review_status: 'pending',
       } as OjtSubmissionStep)
       setResponses(updated)
+    } catch (err) {
+      setPhotoError('Photo upload failed — your photo is saved locally but may not sync. Try retaking.')
+      console.error('[photo upload]', err)
     } finally {
       setUploadingPhoto(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -158,7 +164,9 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
 
   function canConfirm(): boolean {
     if (!step) return false
-    if (step.photo_required && !response?.photo_path) return false
+    // Accept either a local preview (photo selected) or confirmed upload
+    const hasPhoto = !!photoPreviewUrls.get(step.id) || !!response?.photo_path
+    if (step.photo_required && !hasPhoto) return false
     if (step.kc_question && !response?.kc_response) return false
     return true
   }
@@ -308,13 +316,16 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors ${
                 uploadingPhoto
                   ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                  : response?.photo_path
+                  : photoPreviewUrls.get(step.id) || response?.photo_path
                   ? 'bg-slate-700 hover:bg-slate-600 text-slate-300'
                   : 'bg-violet-600 hover:bg-violet-500 text-white'
               }`}
             >
-              {uploadingPhoto ? 'Uploading…' : response?.photo_path ? 'Retake Photo' : 'Capture Photo'}
+              {uploadingPhoto ? 'Uploading…' : photoPreviewUrls.get(step.id) || response?.photo_path ? 'Retake Photo' : 'Capture Photo'}
             </label>
+            {photoError && (
+              <p className="text-xs text-amber-400 mt-2">⚠️ {photoError}</p>
+            )}
           </div>
         )}
 
