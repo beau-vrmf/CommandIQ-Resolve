@@ -427,6 +427,14 @@ export async function upsertStep(
   return data as OjtProcedureStep
 }
 
+export async function deleteProcedure(procedureId: string): Promise<void> {
+  const { error } = await supabase
+    .from('ojt_procedures')
+    .delete()
+    .eq('id', procedureId)
+  if (error) throw error
+}
+
 export async function deleteStep(stepId: string): Promise<void> {
   const { error } = await supabase
     .from('ojt_procedure_steps')

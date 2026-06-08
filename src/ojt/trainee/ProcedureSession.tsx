@@ -27,6 +27,7 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
   const [photoPreviewUrls, setPhotoPreviewUrls] = useState<Map<string, string>>(new Map())
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)  // brief flash before auto-advance
   const [showImage, setShowImage] = useState(false)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [done, setDone] = useState(false)
@@ -85,6 +86,12 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
         responded_at: new Date().toISOString(),
       } as OjtSubmissionStep)
       setResponses(updated)
+      // Auto-advance after a short pause so the selected state is visible
+      setConfirmed(true)
+      setTimeout(() => {
+        setConfirmed(false)
+        goNext()
+      }, 700)
     } finally {
       setSaving(false)
     }
@@ -377,7 +384,7 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
                 <button
                   key={value}
                   onClick={() => handleConfirm(value)}
-                  disabled={saving || !canConfirm()}
+                  disabled={saving || confirmed || !canConfirm()}
                   className={`py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors disabled:opacity-40 ${
                     response?.confirmation === value
                       ? colorSelected[color]
@@ -393,6 +400,10 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
             )}
             {step.kc_question && !response?.kc_response && (
               <p className="text-xs text-amber-400 mt-2">Answer the knowledge check before confirming</p>
+            )}
+            {/* After confirming on the last step, prompt to use the footer button */}
+            {confirmed && isLastStep && (
+              <p className="text-xs text-violet-400 mt-2 text-center">✓ Saved — tap Review &amp; Submit below</p>
             )}
           </div>
         )}

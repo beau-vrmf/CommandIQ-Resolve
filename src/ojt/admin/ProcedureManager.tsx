@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { OjtProcedure, getAllProcedures, upsertProcedure } from '../../db/ojt'
+import { OjtProcedure, getAllProcedures, upsertProcedure, deleteProcedure } from '../../db/ojt'
 import { ProcedureEditor } from './ProcedureEditor'
 import { UserManager } from './UserManager'
 
 type View = { kind: 'list' } | { kind: 'editor'; procedure: OjtProcedure } | { kind: 'users' }
+type Tab = 'active' | 'archived'
 
 const AIRCRAFT_OPTIONS = ['C-130', 'C-17', 'F-16', 'F-15', 'A-10', 'KC-135', 'B-52', 'Other']
 
@@ -12,6 +13,7 @@ export function ProcedureManager() {
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<View>({ kind: 'list' })
   const [showForm, setShowForm] = useState(false)
+  const [tab, setTab] = useState<Tab>('active')
 
   async function load() {
     setLoading(true)
@@ -21,8 +23,19 @@ export function ProcedureManager() {
 
   useEffect(() => { void load() }, [])
 
-  async function toggleActive(proc: OjtProcedure) {
-    await upsertProcedure({ ...proc, is_active: !proc.is_active })
+  async function archive(proc: OjtProcedure) {
+    await upsertProcedure({ ...proc, is_active: false })
+    void load()
+  }
+
+  async function restore(proc: OjtProcedure) {
+    await upsertProcedure({ ...proc, is_active: true })
+    void load()
+  }
+
+  async function handleDelete(proc: OjtProcedure) {
+    if (!confirm(`Permanently delete "${proc.title}"? This cannot be undone and will remove all steps.`)) return
+    await deleteProcedure(proc.id)
     void load()
   }
 
@@ -34,9 +47,12 @@ export function ProcedureManager() {
     return <UserManager onBack={() => setView({ kind: 'list' })} />
   }
 
+  const visible = procedures.filter((p) => tab === 'active' ? p.is_active : !p.is_active)
+
   return (
     <div className="px-4 py-5 max-w-2xl mx-auto w-full">
-      <div className="flex items-center justify-between mb-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold text-white">Admin</h2>
         <div className="flex gap-2">
           <button
@@ -45,14 +61,42 @@ export function ProcedureManager() {
           >
             Users
           </button>
-          <button
-            onClick={() => setShowForm(true)}
-            className="text-sm px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium transition-colors"
-          >
-            + Procedure
-          </button>
+          {tab === 'active' && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="text-sm px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-medium transition-colors"
+            >
+              + Procedure
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 border-b border-slate-800">
+        {(['active', 'archived'] as Tab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => { setTab(t); setShowForm(false) }}
+            className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors capitalize ${
+              tab === t
+                ? 'border-violet-500 text-violet-400'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            {t}
+            <span className="ml-1.5 text-xs text-slate-500">
+              ({procedures.filter((p) => t === 'active' ? p.is_active : !p.is_active).length})
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {tab === 'archived' && (
+        <p className="text-xs text-slate-500 mb-4">
+          Archived procedures are hidden from trainees. Restore to make them active again, or permanently delete from here.
+        </p>
+      )}
 
       {showForm && (
         <NewProcedureForm
@@ -65,14 +109,16 @@ export function ProcedureManager() {
         <div className="flex justify-center py-12">
           <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
         </div>
-      ) : procedures.length === 0 ? (
-        <p className="text-slate-500 text-sm text-center py-12">No procedures yet. Create one to get started.</p>
+      ) : visible.length === 0 ? (
+        <p className="text-slate-500 text-sm text-center py-12">
+          {tab === 'active' ? 'No active procedures. Create one to get started.' : 'No archived procedures.'}
+        </p>
       ) : (
         <div className="flex flex-col gap-3">
-          {procedures.map((proc) => (
+          {visible.map((proc) => (
             <div
               key={proc.id}
-              className={`p-4 bg-slate-800 border rounded-xl ${proc.is_active ? 'border-slate-700' : 'border-slate-800 opacity-60'}`}
+              className={`p-4 bg-slate-800 border rounded-xl ${tab === 'archived' ? 'border-slate-800 opacity-75' : 'border-slate-700'}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -84,23 +130,47 @@ export function ProcedureManager() {
                     <p className="text-xs text-slate-500 mt-0.5">{proc.procedure_category}</p>
                   )}
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${proc.is_active ? 'bg-green-900/50 text-green-300 border border-green-700' : 'bg-slate-700 text-slate-500'}`}>
-                  {proc.is_active ? 'Active' : 'Inactive'}
+                <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${
+                  proc.is_active
+                    ? 'bg-green-900/50 text-green-300 border border-green-700'
+                    : 'bg-slate-700 text-slate-500 border border-slate-600'
+                }`}>
+                  {proc.is_active ? 'Active' : 'Archived'}
                 </span>
               </div>
+
               <div className="flex gap-2 mt-3">
-                <button
-                  onClick={() => setView({ kind: 'editor', procedure: proc })}
-                  className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
-                >
-                  Edit Steps
-                </button>
-                <button
-                  onClick={() => toggleActive(proc)}
-                  className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
-                >
-                  {proc.is_active ? 'Deactivate' : 'Activate'}
-                </button>
+                {tab === 'active' ? (
+                  <>
+                    <button
+                      onClick={() => setView({ kind: 'editor', procedure: proc })}
+                      className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                    >
+                      Edit Steps
+                    </button>
+                    <button
+                      onClick={() => archive(proc)}
+                      className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                    >
+                      Archive
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => restore(proc)}
+                      className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                    >
+                      Restore
+                    </button>
+                    <button
+                      onClick={() => handleDelete(proc)}
+                      className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-red-900 rounded-lg text-slate-400 hover:text-red-300 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ))}
