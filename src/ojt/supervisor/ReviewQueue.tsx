@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react'
-import { OjtProfile, OjtSubmission, OjtProcedure, getReviewQueue } from '../../db/ojt'
+import {
+  OjtProfile,
+  OjtSubmission,
+  OjtProcedure,
+  getReviewQueue,
+  exportTrainingRecordsCSV,
+} from '../../db/ojt'
 import { SubmissionReview } from './SubmissionReview'
+import { TraineeDashboard } from './TraineeDashboard'
 
 interface Props {
   profile: OjtProfile
 }
 
 type FilterTab = 'pending' | 'approved' | 'returned'
+type View = 'queue' | 'review' | 'dashboard'
 
 type QueueItem = OjtSubmission & { procedure: OjtProcedure; profile: OjtProfile }
 
@@ -14,27 +22,55 @@ export function ReviewQueue({ profile }: Props) {
   const [items, setItems] = useState<QueueItem[]>([])
   const [loading, setLoading] = useState(true)
   const [filterTab, setFilterTab] = useState<FilterTab>('pending')
-  const [selected, setSelected] = useState<QueueItem | null>(null)
+  const [view, setView] = useState<View>('queue')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   async function load() {
     setLoading(true)
     try {
-      setItems(await getReviewQueue())
+      setItems(await getReviewQueue(profile.id, profile.role))
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    void load()
+  }, [])
 
-  if (selected) {
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const csv = await exportTrainingRecordsCSV(profile.id, profile.role)
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `training-records-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  if (view === 'review' && selectedId) {
     return (
       <SubmissionReview
-        submissionId={selected.id}
+        submissionId={selectedId}
         reviewer={profile}
-        onBack={() => { setSelected(null); void load() }}
+        onBack={() => {
+          setView('queue')
+          setSelectedId(null)
+          void load()
+        }}
       />
     )
+  }
+
+  if (view === 'dashboard') {
+    return <TraineeDashboard profile={profile} onBack={() => setView('queue')} />
   }
 
   const statusGroups: Record<FilterTab, string[]> = {
@@ -47,7 +83,28 @@ export function ReviewQueue({ profile }: Props) {
 
   return (
     <div className="px-4 py-5 max-w-2xl mx-auto w-full">
-      <h2 className="text-base font-semibold text-white mb-4">Review Queue</h2>
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold text-white">Review Queue</h2>
+        <div className="flex gap-2">
+          {profile.role === 'supervisor' && (
+            <button
+              onClick={() => setView('dashboard')}
+              className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+            >
+              📊 Trainees
+            </button>
+          )}
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors disabled:opacity-50"
+            title="Export approved training records as CSV"
+          >
+            {exporting ? 'Exporting…' : '⬇ Export'}
+          </button>
+        </div>
+      </div>
 
       {/* Filter tabs */}
       <div className="flex gap-1 mb-5 bg-slate-800 rounded-xl p-1">
@@ -71,9 +128,13 @@ export function ReviewQueue({ profile }: Props) {
             >
               {tab.label}
               {count > 0 && (
-                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-                  tab.id === 'pending' ? 'bg-blue-700 text-blue-100' : 'bg-slate-600 text-slate-300'
-                }`}>
+                <span
+                  className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                    tab.id === 'pending'
+                      ? 'bg-blue-700 text-blue-100'
+                      : 'bg-slate-600 text-slate-300'
+                  }`}
+                >
                   {count}
                 </span>
               )}
@@ -90,7 +151,9 @@ export function ReviewQueue({ profile }: Props) {
 
       {!loading && filtered.length === 0 && (
         <p className="text-slate-500 text-sm text-center py-12">
-          {filterTab === 'pending' ? 'No submissions awaiting review.' : `No ${filterTab} submissions.`}
+          {filterTab === 'pending'
+            ? 'No submissions awaiting review.'
+            : `No ${filterTab} submissions.`}
         </p>
       )}
 
@@ -98,7 +161,10 @@ export function ReviewQueue({ profile }: Props) {
         {filtered.map((item) => (
           <button
             key={item.id}
-            onClick={() => setSelected(item)}
+            onClick={() => {
+              setSelectedId(item.id)
+              setView('review')
+            }}
             className="text-left p-4 bg-slate-800 border border-slate-700 hover:border-violet-500 rounded-xl transition group"
           >
             <div className="flex items-start justify-between gap-3">
@@ -107,7 +173,8 @@ export function ReviewQueue({ profile }: Props) {
                   {item.procedure.title}
                 </p>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {item.profile.rank ? `${item.profile.rank} ` : ''}{item.profile.display_name}
+                  {item.profile.rank ? `${item.profile.rank} ` : ''}
+                  {item.profile.display_name}
                   {' · '}#{item.profile.man_number}
                 </p>
                 <p className="text-xs text-slate-500 mt-1">
@@ -141,7 +208,9 @@ function StatusChip({ status }: { status: string }) {
     retrain: 'Retrain',
   }
   return (
-    <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${map[status] ?? 'bg-slate-700 text-slate-400'}`}>
+    <span
+      className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${map[status] ?? 'bg-slate-700 text-slate-400'}`}
+    >
       {labels[status] ?? status}
     </span>
   )

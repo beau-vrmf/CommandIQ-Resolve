@@ -8,6 +8,7 @@ import {
   uploadStepImage,
   upsertProcedure,
 } from '../../db/ojt'
+import { QuizEditor } from './QuizEditor'
 
 // Lazy-load ExcelImport so xlsx is only fetched when needed
 const ExcelImport = lazy(() => import('./ExcelImport').then((m) => ({ default: m.ExcelImport })))
@@ -23,6 +24,7 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
   const [editingStep, setEditingStep] = useState<Partial<OjtProcedureStep> | null>(null)
   const [editingProcedure, setEditingProcedure] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showQuiz, setShowQuiz] = useState(false)
   const [procForm, setProcForm] = useState({
     title: procedure.title,
     required_tools: procedure.required_tools ?? '',
@@ -84,6 +86,10 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
     void load()
   }
 
+  if (showQuiz) {
+    return <QuizEditor procedure={procedure} onBack={() => setShowQuiz(false)} />
+  }
+
   return (
     <div className="px-4 py-5 max-w-2xl mx-auto w-full">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white mb-4 transition-colors">
@@ -137,6 +143,12 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm font-semibold text-slate-300">{steps.filter((s) => s.is_active).length} Steps</p>
         <div className="flex gap-2">
+          <button
+            onClick={() => setShowQuiz(true)}
+            className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+          >
+            📝 Edit Quiz
+          </button>
           <button
             onClick={() => setShowImport(true)}
             className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"

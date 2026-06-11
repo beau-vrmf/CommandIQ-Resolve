@@ -46,6 +46,7 @@ export interface OjtProcedure {
   cautions: string | null
   notes: string | null
   version: string
+  quiz_passing_score: number | null
   is_active: boolean
   created_at: string
 }
@@ -98,6 +99,38 @@ export interface OjtSubmissionStep {
   photo_review_status: PhotoReviewStatus | null
   photo_review_comments: string | null
   responded_at: string | null
+}
+
+export type QuizQuestionType = 'multiple_choice' | 'yes_no' | 'short_answer'
+
+export interface OjtQuizQuestion {
+  id: string
+  procedure_id: string
+  question_text: string
+  question_type: QuizQuestionType
+  options: string[] | null
+  correct_answer: string | null
+  sort_order: number
+  is_active: boolean
+  created_at: string
+}
+
+export interface OjtQuizResponse {
+  id: string
+  submission_id: string
+  question_id: string
+  response: string | null
+  is_correct: boolean | null
+  answered_at: string
+}
+
+export interface TraineeSummary {
+  profile: OjtProfile
+  totalSubmissions: number
+  approvedSubmissions: number
+  pendingSubmissions: number
+  returnedSubmissions: number
+  lastActivityAt: string | null
 }
 
 export interface ProcedureWithSteps {
@@ -311,14 +344,31 @@ export async function getMySubmissions(profileId: string): Promise<OjtSubmission
 
 // ─── Supervisor/Admin — review queue ─────────────────────────────────────────
 
-export async function getReviewQueue(): Promise<
-  Array<OjtSubmission & { procedure: OjtProcedure; profile: OjtProfile }>
-> {
-  const { data, error } = await supabase
+export async function getReviewQueue(
+  profileId: string,
+  role: OjtRole,
+): Promise<Array<OjtSubmission & { procedure: OjtProcedure; profile: OjtProfile }>> {
+  let traineeIds: string[] | null = null
+  if (role === 'supervisor') {
+    const { data: trainees } = await supabase
+      .from('ojt_profiles')
+      .select('id')
+      .eq('supervisor_id', profileId)
+    traineeIds = (trainees || []).map((t: { id: string }) => t.id)
+    if (traineeIds.length === 0) return []
+  }
+
+  let query = supabase
     .from('ojt_submissions')
     .select('*, procedure:ojt_procedures(*), profile:ojt_profiles(*)')
     .in('status', ['submitted', 'returned', 'approved', 'incomplete', 'retrain'])
     .order('submitted_at', { ascending: false })
+
+  if (traineeIds) {
+    query = query.in('profile_id', traineeIds)
+  }
+
+  const { data, error } = await query
   if (error) throw error
   return (data || []) as Array<OjtSubmission & { procedure: OjtProcedure; profile: OjtProfile }>
 }
@@ -475,6 +525,233 @@ export async function updateProfile(
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('id', profileId)
   if (error) throw error
+}
+
+// ─── Latest submission (for re-submission flow) ───────────────────────────────
+
+export async function getLatestSubmission(
+  profileId: string,
+  procedureId: string,
+): Promise<OjtSubmission | null> {
+  const { data, error } = await supabase
+    .from('ojt_submissions')
+    .select('*')
+    .eq('profile_id', profileId)
+    .eq('procedure_id', procedureId)
+    .not('status', 'eq', 'approved')
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (error) throw error
+  return data && data.length > 0 ? (data[0] as OjtSubmission) : null
+}
+
+// ─── Quiz management (admin) ──────────────────────────────────────────────────
+
+export async function getQuizQuestions(procedureId: string): Promise<OjtQuizQuestion[]> {
+  const { data, error } = await supabase
+    .from('ojt_quiz_questions')
+    .select('*')
+    .eq('procedure_id', procedureId)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  if (error) throw error
+  return (data || []) as OjtQuizQuestion[]
+}
+
+export async function upsertQuizQuestion(
+  payload: Partial<OjtQuizQuestion> & { procedure_id: string; question_text: string },
+): Promise<OjtQuizQuestion> {
+  const { data, error } = await supabase
+    .from('ojt_quiz_questions')
+    .upsert(payload, { onConflict: 'id' })
+    .select()
+    .single()
+  if (error) throw error
+  return data as OjtQuizQuestion
+}
+
+export async function deleteQuizQuestion(questionId: string): Promise<void> {
+  const { error } = await supabase
+    .from('ojt_quiz_questions')
+    .update({ is_active: false })
+    .eq('id', questionId)
+  if (error) throw error
+}
+
+// ─── Quiz responses (trainee) ─────────────────────────────────────────────────
+
+export async function upsertQuizResponse(
+  submissionId: string,
+  questionId: string,
+  response: string,
+  isCorrect: boolean | null,
+): Promise<void> {
+  const { error } = await supabase.from('ojt_quiz_responses').upsert(
+    {
+      submission_id: submissionId,
+      question_id: questionId,
+      response,
+      is_correct: isCorrect,
+      answered_at: new Date().toISOString(),
+    },
+    { onConflict: 'submission_id,question_id' },
+  )
+  if (error) throw error
+}
+
+export async function getQuizResponses(submissionId: string): Promise<OjtQuizResponse[]> {
+  const { data, error } = await supabase
+    .from('ojt_quiz_responses')
+    .select('*')
+    .eq('submission_id', submissionId)
+  if (error) throw error
+  return (data || []) as OjtQuizResponse[]
+}
+
+// ─── Supervisor — trainee dashboard ──────────────────────────────────────────
+
+export async function getTraineeSummaries(supervisorProfileId: string): Promise<TraineeSummary[]> {
+  const { data: trainees, error } = await supabase
+    .from('ojt_profiles')
+    .select('*')
+    .eq('supervisor_id', supervisorProfileId)
+    .eq('role', 'trainee')
+    .order('display_name', { ascending: true })
+  if (error) throw error
+  if (!trainees || trainees.length === 0) return []
+
+  const traineeIds = (trainees as OjtProfile[]).map((t) => t.id)
+  const { data: submissions } = await supabase
+    .from('ojt_submissions')
+    .select('profile_id, status, started_at, reviewed_at')
+    .in('profile_id', traineeIds)
+
+  type SubRow = { profile_id: string; status: string; started_at: string; reviewed_at: string | null }
+  const subsByTrainee = new Map<string, SubRow[]>()
+  for (const s of (submissions || []) as SubRow[]) {
+    const list = subsByTrainee.get(s.profile_id) ?? []
+    list.push(s)
+    subsByTrainee.set(s.profile_id, list)
+  }
+
+  return (trainees as OjtProfile[]).map((profile) => {
+    const subs = subsByTrainee.get(profile.id) ?? []
+    const totalSubmissions = subs.length
+    const approvedSubmissions = subs.filter((s) => s.status === 'approved').length
+    const pendingSubmissions = subs.filter((s) => s.status === 'submitted').length
+    const returnedSubmissions = subs.filter((s) =>
+      ['returned', 'incomplete', 'retrain'].includes(s.status),
+    ).length
+    const sorted = [...subs].sort(
+      (a, b) =>
+        new Date(b.reviewed_at ?? b.started_at).getTime() -
+        new Date(a.reviewed_at ?? a.started_at).getTime(),
+    )
+    const lastActivityAt = sorted.length > 0 ? (sorted[0].reviewed_at ?? sorted[0].started_at) : null
+    return {
+      profile,
+      totalSubmissions,
+      approvedSubmissions,
+      pendingSubmissions,
+      returnedSubmissions,
+      lastActivityAt,
+    }
+  })
+}
+
+// ─── Notification counts ──────────────────────────────────────────────────────
+
+export async function getPendingReviewCount(profileId: string, role: OjtRole): Promise<number> {
+  if (role === 'supervisor') {
+    const { data: trainees } = await supabase
+      .from('ojt_profiles')
+      .select('id')
+      .eq('supervisor_id', profileId)
+    const ids = (trainees || []).map((t: { id: string }) => t.id)
+    if (ids.length === 0) return 0
+    const { count } = await supabase
+      .from('ojt_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'submitted')
+      .in('profile_id', ids)
+    return count ?? 0
+  }
+  const { count } = await supabase
+    .from('ojt_submissions')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'submitted')
+  return count ?? 0
+}
+
+export async function getReturnedCount(profileId: string): Promise<number> {
+  const { count } = await supabase
+    .from('ojt_submissions')
+    .select('id', { count: 'exact', head: true })
+    .eq('profile_id', profileId)
+    .in('status', ['returned', 'incomplete', 'retrain'])
+  return count ?? 0
+}
+
+// ─── Training records CSV export ──────────────────────────────────────────────
+
+export async function exportTrainingRecordsCSV(
+  profileId: string,
+  role: OjtRole,
+): Promise<string> {
+  let traineeIds: string[] | null = null
+  if (role === 'supervisor') {
+    const { data: trainees } = await supabase
+      .from('ojt_profiles')
+      .select('id')
+      .eq('supervisor_id', profileId)
+    traineeIds = (trainees || []).map((t: { id: string }) => t.id)
+  }
+
+  let query = supabase
+    .from('ojt_submissions')
+    .select('*, procedure:ojt_procedures(*), profile:ojt_profiles(*)')
+    .eq('status', 'approved')
+    .order('reviewed_at', { ascending: false })
+
+  if (traineeIds) {
+    query = query.in('profile_id', traineeIds)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+
+  const rows = (data || []) as Array<
+    OjtSubmission & { procedure: OjtProcedure; profile: OjtProfile }
+  >
+  const header = [
+    'Trainee Name',
+    'Man Number',
+    'Rank',
+    'Aircraft',
+    'AFSC',
+    'Procedure',
+    'Version',
+    'Started',
+    'Submitted',
+    'Approved Date',
+    'Reviewer Comments',
+  ].join(',')
+  const lines = rows.map((r) =>
+    [
+      `"${r.profile.display_name}"`,
+      r.profile.man_number,
+      r.profile.rank ?? '',
+      r.procedure.aircraft,
+      r.procedure.afsc ?? '',
+      `"${r.procedure.title.replace(/"/g, '""')}"`,
+      r.procedure.version,
+      r.started_at ? new Date(r.started_at).toLocaleDateString() : '',
+      r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '',
+      r.reviewed_at ? new Date(r.reviewed_at).toLocaleDateString() : '',
+      `"${(r.reviewer_comments ?? '').replace(/"/g, '""')}"`,
+    ].join(','),
+  )
+  return [header, ...lines].join('\n')
 }
 
 export async function createUserViaEdgeFunction(payload: {

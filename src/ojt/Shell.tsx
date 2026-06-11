@@ -1,6 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { OjtProfile, signOut } from '../db/ojt'
+import {
+  OjtProfile,
+  signOut,
+  getPendingReviewCount,
+  getReturnedCount,
+} from '../db/ojt'
 import { ProcedureList } from './trainee/ProcedureList'
 import { ReviewQueue } from './supervisor/ReviewQueue'
 import { ProcedureManager } from './admin/ProcedureManager'
@@ -15,16 +20,50 @@ type Tab = 'procedures' | 'reviews' | 'manage'
 export function OjtShell({ profile, onSignedOut }: Props) {
   const isSupervisorOrAdmin = profile.role === 'supervisor' || profile.role === 'admin'
   const isAdmin = profile.role === 'admin'
+  const isTrainee = profile.role === 'trainee'
   const [activeTab, setActiveTab] = useState<Tab>('procedures')
+  const [pendingCount, setPendingCount] = useState(0)
+  const [returnedCount, setReturnedCount] = useState(0)
+
+  useEffect(() => {
+    async function loadBadges() {
+      try {
+        if (isSupervisorOrAdmin) {
+          const count = await getPendingReviewCount(profile.id, profile.role)
+          setPendingCount(count)
+        }
+        if (isTrainee || isSupervisorOrAdmin) {
+          // Trainees see their returned count; supervisors/admins don't need this badge
+          if (isTrainee) {
+            const count = await getReturnedCount(profile.id)
+            setReturnedCount(count)
+          }
+        }
+      } catch {
+        // badges are non-critical; ignore errors
+      }
+    }
+    void loadBadges()
+  }, [profile.id, profile.role, isSupervisorOrAdmin, isTrainee])
 
   async function handleSignOut() {
     await signOut()
     onSignedOut()
   }
 
-  const tabs: { id: Tab; label: string; show: boolean }[] = [
-    { id: 'procedures', label: 'Procedures', show: true },
-    { id: 'reviews', label: 'Reviews', show: isSupervisorOrAdmin },
+  const tabs: { id: Tab; label: string; show: boolean; badge?: number }[] = [
+    {
+      id: 'procedures',
+      label: 'Procedures',
+      show: true,
+      badge: isTrainee && returnedCount > 0 ? returnedCount : undefined,
+    },
+    {
+      id: 'reviews',
+      label: 'Reviews',
+      show: isSupervisorOrAdmin,
+      badge: pendingCount > 0 ? pendingCount : undefined,
+    },
     { id: 'manage', label: 'Manage', show: isAdmin },
   ]
 
@@ -35,7 +74,8 @@ export function OjtShell({ profile, onSignedOut }: Props) {
         <div>
           <h1 className="text-base font-semibold tracking-tight">Guided Procedure Training</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            {profile.rank ? `${profile.rank} ` : ''}{profile.display_name}
+            {profile.rank ? `${profile.rank} ` : ''}
+            {profile.display_name}
             <span className="ml-2 text-slate-500">#{profile.man_number}</span>
             <span className="ml-2 capitalize text-slate-600">· {profile.role}</span>
           </p>
@@ -64,13 +104,18 @@ export function OjtShell({ profile, onSignedOut }: Props) {
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id)}
-              className={`py-3 px-3 text-sm font-medium border-b-2 transition-colors ${
+              className={`relative py-3 px-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === t.id
                   ? 'border-violet-500 text-violet-400'
                   : 'border-transparent text-slate-400 hover:text-white'
               }`}
             >
               {t.label}
+              {t.badge != null && t.badge > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-xs font-bold rounded-full bg-red-600 text-white">
+                  {t.badge > 99 ? '99+' : t.badge}
+                </span>
+              )}
             </button>
           ))}
       </nav>

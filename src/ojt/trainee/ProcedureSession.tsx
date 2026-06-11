@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  OjtProfile,
   OjtProcedure,
   OjtProcedureStep,
   OjtSubmission,
@@ -11,17 +10,16 @@ import {
   uploadStepPhoto,
   getSignedUrl,
 } from '../../db/ojt'
-import { CompletionSummary } from './CompletionSummary'
 
 interface Props {
   procedure: OjtProcedure
   steps: OjtProcedureStep[]
   submission: OjtSubmission
-  profile: OjtProfile
+  onComplete: (responses: Map<string, OjtSubmissionStep>) => void
   onBack: () => void
 }
 
-export function ProcedureSession({ procedure, steps, submission, profile, onBack }: Props) {
+export function ProcedureSession({ procedure, steps, submission, onComplete, onBack }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [responses, setResponses] = useState<Map<string, OjtSubmissionStep>>(new Map())
   const [photoPreviewUrls, setPhotoPreviewUrls] = useState<Map<string, string>>(new Map())
@@ -31,7 +29,6 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
   const [confirmed, setConfirmed] = useState(false)  // brief flash before auto-advance
   const [showImage, setShowImage] = useState(false)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [done, setDone] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Load existing responses on mount
@@ -173,7 +170,7 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
 
   function goNext() {
     if (isLastStep) {
-      setDone(true)
+      onComplete(responses)
     } else {
       setCurrentIndex((i) => i + 1)
     }
@@ -181,19 +178,6 @@ export function ProcedureSession({ procedure, steps, submission, profile, onBack
 
   function goPrev() {
     if (currentIndex > 0) setCurrentIndex((i) => i - 1)
-  }
-
-  if (done) {
-    return (
-      <CompletionSummary
-        procedure={procedure}
-        steps={steps}
-        submission={submission}
-        responses={responses}
-        profile={profile}
-        onBack={onBack}
-      />
-    )
   }
 
   if (!step) return null
