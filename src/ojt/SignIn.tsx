@@ -38,7 +38,7 @@ export function OjtSignIn({ onSignedIn }: Props) {
           <Link to="/" className="inline-block text-xs text-slate-500 hover:text-slate-300 mb-6 transition-colors">
             ← Back to Home
           </Link>
-          <h1 className="text-2xl font-bold tracking-tight text-white">OJT Training</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">CommandIQ Assess</h1>
           <p className="text-slate-400 text-sm mt-1">Sign in with your man number</p>
         </div>
 

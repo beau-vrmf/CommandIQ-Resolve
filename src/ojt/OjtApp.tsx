@@ -1,4 +1,4 @@
-// OJT Upgrade Training — entry point.
+// CommandIQ Assess (Guided Procedure Assessment) — entry point.
 // Checks Supabase Auth session on mount; routes to sign-in or the role-gated shell.
 
 import { useEffect, useState } from 'react'

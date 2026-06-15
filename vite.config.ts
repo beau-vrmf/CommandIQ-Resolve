@@ -10,9 +10,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png'],
       manifest: {
-        name: 'CommandIQ Resolve',
+        name: 'CommandIQ Toolkit',
         short_name: 'CmdIQ',
-        description: 'Fault isolation troubleshooting for aircraft maintenance',
+        description: 'CommandIQ Toolkit — Resolve (fault isolation) and Assess (guided procedure assessment) for aircraft maintenance',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',

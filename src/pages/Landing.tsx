@@ -1,5 +1,5 @@
 // Main menu — public, no sign-in required.
-// Two training capabilities: Fault Isolation Training (open) and Guided Procedure Training (sign-in at /ojt).
+// CommandIQ Toolkit: CommandIQ Resolve (open, /resolve) and CommandIQ Assess (sign-in at /ojt).
 
 import { useNavigate } from 'react-router-dom'
 import { useSession } from '../store/session'
@@ -11,8 +11,8 @@ export function Landing() {
   return (
     <div className="flex-1 flex flex-col px-5 py-10 max-w-lg mx-auto w-full">
       <div className="text-center mb-10">
-        <h1 className="text-3xl font-bold tracking-tight text-white">OJT Trainer</h1>
-        <p className="text-slate-400 text-sm mt-2">Select a training capability to begin</p>
+        <h1 className="text-3xl font-bold tracking-tight text-white">CommandIQ Toolkit</h1>
+        <p className="text-slate-400 text-sm mt-2">Select a tool to begin</p>
       </div>
 
       {/* Resume FI session banner */}
@@ -27,7 +27,7 @@ export function Landing() {
       )}
 
       <div className="flex flex-col gap-4">
-        {/* Fault Isolation Training */}
+        {/* CommandIQ Resolve — Fault Isolation */}
         <button
           onClick={() => navigate('/resolve')}
           className="text-left p-6 bg-slate-800 border border-slate-700 hover:border-blue-500 rounded-2xl transition group"
@@ -38,7 +38,7 @@ export function Landing() {
                 🔍
               </div>
               <h2 className="text-lg font-semibold text-white group-hover:text-blue-300 transition">
-                Fault Isolation Training
+                CommandIQ Resolve
               </h2>
               <p className="text-sm text-slate-400 mt-1 leading-relaxed">
                 Work through structured decision trees to diagnose and resolve aircraft malfunctions.
@@ -63,7 +63,7 @@ export function Landing() {
           </div>
         </button>
 
-        {/* Guided Procedure Training */}
+        {/* CommandIQ Assess — Guided Procedure Assessment */}
         <button
           onClick={() => navigate('/ojt')}
           className="text-left p-6 bg-slate-800 border border-slate-700 hover:border-violet-500 rounded-2xl transition group"
@@ -74,7 +74,7 @@ export function Landing() {
                 📋
               </div>
               <h2 className="text-lg font-semibold text-white group-hover:text-violet-300 transition">
-                Guided Procedure Training
+                CommandIQ Assess
               </h2>
               <p className="text-sm text-slate-400 mt-1 leading-relaxed">
                 Complete approved maintenance procedures step by step with visual references and supervisor review.

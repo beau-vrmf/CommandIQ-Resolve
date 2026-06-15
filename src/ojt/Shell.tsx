@@ -72,7 +72,7 @@ export function OjtShell({ profile, onSignedOut }: Props) {
       {/* Top bar */}
       <header className="bg-slate-950 border-b border-slate-800 px-4 py-3 flex items-center justify-between flex-shrink-0">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">Guided Procedure Training</h1>
+          <h1 className="text-base font-semibold tracking-tight">CommandIQ Assess</h1>
           <p className="text-xs text-slate-400 mt-0.5">
             {profile.rank ? `${profile.rank} ` : ''}
             {profile.display_name}

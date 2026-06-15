@@ -1,4 +1,4 @@
-// OJT Guided Procedure Training — all database operations.
+// CommandIQ Assess (Guided Procedure Assessment) — all database operations.
 // Auth note: man numbers are stored as {manNumber}@ojt.internal in Supabase Auth.
 
 import { supabase } from './supabase'
