@@ -41,7 +41,7 @@ export function Landing() {
                 CommandIQ Resolve
               </h2>
               <p className="text-sm text-slate-400 mt-1 leading-relaxed">
-                Work through structured decision trees to diagnose and resolve aircraft malfunctions.
+                Diagnose and resolve aircraft malfunctions using fault isolation guidance.
               </p>
             </div>
             <span className="text-slate-500 group-hover:text-blue-400 transition text-xl flex-shrink-0 mt-1">→</span>
@@ -77,7 +77,7 @@ export function Landing() {
                 CommandIQ Assess
               </h2>
               <p className="text-sm text-slate-400 mt-1 leading-relaxed">
-                Complete approved maintenance procedures step by step with visual references and supervisor review.
+                Complete maintenance tasks step by step using job guide procedures, with photo verification and supervisor review.
               </p>
             </div>
             <span className="text-slate-500 group-hover:text-violet-400 transition text-xl flex-shrink-0 mt-1">→</span>
