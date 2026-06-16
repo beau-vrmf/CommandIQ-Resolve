@@ -5,15 +5,30 @@
 // via Tesseract.js: each page is rendered to a canvas in the browser and the
 // characters are recognized locally. The page images never leave the device —
 // only the OCR engine/model is fetched from a CDN (contains no user content).
+//
+// Job-guide figure pages: in TO-format manuals, a page of numbered steps is
+// typically followed by a full-page illustration of the panel those steps act
+// on. We detect those figure pages, render them to JPEGs in-browser (same
+// on-device canvas path as OCR — nothing leaves the device), and attach each
+// figure to the steps in the text run that precedes it, so the trainee sees the
+// relevant diagram beside each step. The admin can detach any image in review.
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import { OjtProcedure, upsertStep } from '../../db/ojt'
+import { OjtProcedure, upsertStep, uploadJobGuideImage } from '../../db/ojt'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+// A figure page rendered to an uploadable image, plus a preview object URL and
+// the (1-based) source page it came from.
+interface JobGuideImage {
+  file: File
+  url: string
+  page: number
+}
 
 interface DraftStep {
   step_number: number
@@ -23,6 +38,8 @@ interface DraftStep {
   note: string
   is_critical: boolean
   photo_required: boolean
+  sourcePage: number              // 0-based page the step was parsed from
+  jobGuideImage?: JobGuideImage   // matched figure page, if any
 }
 
 interface Props {
@@ -34,11 +51,20 @@ interface Props {
 
 type Phase = 'pick' | 'parsing' | 'needsOcr' | 'ocr' | 'review' | 'saving'
 
-// ─── PDF text extraction ──────────────────────────────────────────────────────
+// A loaded pdf.js document. Typed off getDocument so we don't import the proxy
+// type name (which has moved between pdfjs-dist versions).
+type PdfDoc = Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']> & {
+  destroy?: () => void // present at runtime; not always in the published types
+}
 
-async function extractPdfText(file: File): Promise<string> {
+async function loadPdf(file: File): Promise<PdfDoc> {
   const buffer = await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+  return pdfjsLib.getDocument({ data: buffer }).promise
+}
+
+// ─── PDF text extraction (one string per page) ──────────────────────────────────
+
+async function extractPagesText(pdf: PdfDoc): Promise<string[]> {
   const pages: string[] = []
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)
@@ -48,23 +74,21 @@ async function extractPdfText(file: File): Promise<string> {
       .join(' ')
     pages.push(pageText)
   }
-  return pages.join('\n')
+  return pages
 }
 
 // ─── On-device OCR (scanned PDFs) ───────────────────────────────────────────────
 // Renders each page to a canvas, then recognizes characters locally with
 // Tesseract.js. Tesseract is dynamically imported so its wasm core only loads
-// when OCR is actually needed.
+// when OCR is actually needed. Returns one string per page.
 
 interface OcrProgress { page: number; total: number; pct: number }
 
-async function ocrPdf(
-  file: File,
+async function ocrPages(
+  pdf: PdfDoc,
   onProgress: (p: OcrProgress) => void,
-): Promise<string> {
+): Promise<string[]> {
   const { createWorker } = await import('tesseract.js')
-  const buffer = await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
 
   let curPage = 0
   const totalPages = pdf.numPages
@@ -100,7 +124,27 @@ async function ocrPdf(
   } finally {
     await worker.terminate()
   }
-  return pages.join('\n')
+  return pages
+}
+
+// ─── Render a page to an uploadable JPEG (figure pages) ──────────────────────────
+// Runs entirely in-browser on a canvas — the image never leaves the device.
+
+async function renderPageImage(pdf: PdfDoc, pageNum: number): Promise<File> {
+  const page = await pdf.getPage(pageNum)
+  const viewport = page.getViewport({ scale: 2 })
+  const canvas = document.createElement('canvas')
+  canvas.width = viewport.width
+  canvas.height = viewport.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not create canvas context.')
+  await page.render({ canvas, canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not render page image.'))), 'image/jpeg', 0.85)
+  })
+  canvas.width = 0
+  canvas.height = 0
+  return new File([blob], `figure-p${pageNum}.jpg`, { type: 'image/jpeg' })
 }
 
 // ─── Pattern matching parser ──────────────────────────────────────────────────
@@ -147,12 +191,34 @@ function isNoise(l: string): boolean {
   return false
 }
 
-function parsePdf(text: string): DraftStep[] {
-  let lines = text.split(/\n|(?<=\.) (?=\d+\.)/g).map((l) => l.trim()).filter(Boolean)
-  lines = dehyphenate(lines)
+// Split a page of text into cleaned, de-hyphenated lines. Also breaks apart
+// steps that OCR glued onto one line ("...done. 2. Next...").
+function splitLines(pageText: string): string[] {
+  const lines = pageText.split(/\n|(?<=\.) (?=\d+\.)/g).map((l) => l.trim()).filter(Boolean)
+  return dehyphenate(lines)
+}
 
+// Classify a page as a full-page figure/illustration (vs. a text/step page).
+// Figure pages carry a graphic identifier (e.g. "00JG-10-0-112BL7.0") and/or
+// produce almost nothing but scan-noise when run through OCR, and contain no
+// numbered steps.
+function isFigurePage(pageText: string): boolean {
+  const lines = splitLines(pageText)
+  if (lines.length === 0) return false
+  // A numbered step or "Step N" means this is a text page, never a figure.
+  const hasStep = lines.some((l) => /^(\d+)[.)]\s+/.test(l) || /^[Ss]tep\s+\d/i.test(l))
+  if (hasStep) return false
+  const hasFigureId = lines.some((l) => /\d{2}JG-\d/.test(l) || /JG-\d.*BL/i.test(l) || /BL\d\.\d/.test(l))
+  // Lines that survive noise filtering AND carry a real word — i.e. genuine prose.
+  const realLines = lines.filter((l) => !isNoise(l) && /[A-Za-z]{4,}/.test(l))
+  if (hasFigureId && realLines.length <= 4) return true       // figure ID + little prose
+  return lines.length >= 4 && realLines.length <= 2           // mostly scan-noise → illustration
+}
+
+function parsePages(pages: string[]): DraftStep[] {
   const steps: DraftStep[] = []
   let current: DraftStep | null = null
+  let curPage = 0
 
   // In job guides, WARNING / CAUTION / NOTE blocks PRECEDE the step they apply
   // to — you read the advisory, then perform the action below it. So we buffer
@@ -180,56 +246,63 @@ function parsePdf(text: string): DraftStep[] {
     pending = { warning: '', caution: '', note: '' }
   }
 
-  for (const raw of lines) {
-    const line = raw.trim()
-    if (!line) continue
+  // Iterate page by page so each step records the page it started on. Parser
+  // state (current step, pending advisories, continuation target) deliberately
+  // carries across page boundaries, since a step or advisory can wrap onto the
+  // next page.
+  for (curPage = 0; curPage < pages.length; curPage++) {
+    for (const raw of splitLines(pages[curPage])) {
+      const line = raw.trim()
+      if (!line) continue
 
-    // 1. New numbered step — advisories seen above bind to THIS (the post step).
-    const stepMatch = line.match(stepRegex) ?? line.match(stepAltRegex)
-    if (stepMatch) {
-      flush()
-      current = {
-        step_number: parseInt(stepMatch[1], 10),
-        instruction: stepMatch[2].trim(),
-        warning: pending.warning,
-        caution: pending.caution,
-        note: pending.note,
-        is_critical: false,
-        photo_required: false,
+      // 1. New numbered step — advisories seen above bind to THIS (the post step).
+      const stepMatch = line.match(stepRegex) ?? line.match(stepAltRegex)
+      if (stepMatch) {
+        flush()
+        current = {
+          step_number: parseInt(stepMatch[1], 10),
+          instruction: stepMatch[2].trim(),
+          warning: pending.warning,
+          caution: pending.caution,
+          note: pending.note,
+          is_critical: false,
+          photo_required: false,
+          sourcePage: curPage,
+        }
+        pending = { warning: '', caution: '', note: '' }
+        cont = 'instruction'
+        continue
       }
-      pending = { warning: '', caution: '', note: '' }
-      cont = 'instruction'
-      continue
+
+      // 2. Advisory label (own-line or inline).
+      const advMatch = line.match(advRegex)
+      if (advMatch) {
+        const kind = advMatch[1].toLowerCase() as 'warning' | 'caution' | 'note'
+        cont = kind
+        if (advMatch[2].trim()) pending[kind] = append(pending[kind], advMatch[2].trim())
+        continue
+      }
+
+      // 3. Sub-step (a. b. c.) belongs to the CURRENT step; any advisory that
+      //    appeared mid-step (between the parent step and its sub-steps) binds here.
+      if (current && subStepRegex.test(line)) {
+        bindPendingTo(current)
+        current.instruction = append(current.instruction, line)
+        cont = 'instruction'
+        continue
+      }
+
+      // 4. Free text that isn't structural — drop scan noise before treating it
+      //    as continuation.
+      if (isNoise(line)) continue
+
+      // 5. Continuation (wrapped) line — append to whatever block we're inside.
+      if (cont === 'warning') pending.warning = append(pending.warning, line)
+      else if (cont === 'caution') pending.caution = append(pending.caution, line)
+      else if (cont === 'note') pending.note = append(pending.note, line)
+      else if (cont === 'instruction' && current) current.instruction = append(current.instruction, line)
+      // else: prose before the first step with no advisory context — ignore.
     }
-
-    // 2. Advisory label (own-line or inline).
-    const advMatch = line.match(advRegex)
-    if (advMatch) {
-      const kind = advMatch[1].toLowerCase() as 'warning' | 'caution' | 'note'
-      cont = kind
-      if (advMatch[2].trim()) pending[kind] = append(pending[kind], advMatch[2].trim())
-      continue
-    }
-
-    // 3. Sub-step (a. b. c.) belongs to the CURRENT step; any advisory that
-    //    appeared mid-step (between the parent step and its sub-steps) binds here.
-    if (current && subStepRegex.test(line)) {
-      bindPendingTo(current)
-      current.instruction = append(current.instruction, line)
-      cont = 'instruction'
-      continue
-    }
-
-    // 4. Free text that isn't structural — drop scan noise before treating it
-    //    as continuation.
-    if (isNoise(line)) continue
-
-    // 5. Continuation (wrapped) line — append to whatever block we're inside.
-    if (cont === 'warning') pending.warning = append(pending.warning, line)
-    else if (cont === 'caution') pending.caution = append(pending.caution, line)
-    else if (cont === 'note') pending.note = append(pending.note, line)
-    else if (cont === 'instruction' && current) current.instruction = append(current.instruction, line)
-    // else: prose before the first step with no advisory context — ignore.
   }
   flush()
 
@@ -250,9 +323,57 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saveProgress, setSaveProgress] = useState(0)
-  const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // The loaded pdf.js doc is held in a ref (not state) so OCR and figure
+  // rendering can reuse it without re-parsing the file or triggering renders.
+  const pdfRef = useRef<PdfDoc | null>(null)
+  // Object URLs we create for figure previews, revoked on unmount.
+  const urlsRef = useRef<string[]>([])
+
+  // Release preview URLs and the pdf doc when the wizard closes.
+  useEffect(() => {
+    return () => {
+      urlsRef.current.forEach((u) => URL.revokeObjectURL(u))
+      urlsRef.current = []
+      pdfRef.current?.destroy?.()
+      pdfRef.current = null
+    }
+  }, [])
+
+  // Parse steps, detect figure pages, render them, and bind each figure to the
+  // steps in the text run that precedes it.
+  async function finalize(pages: string[]) {
+    const steps = parsePages(pages)
+    const pdf = pdfRef.current
+
+    if (pdf) {
+      const figurePages: number[] = []
+      pages.forEach((t, i) => { if (isFigurePage(t)) figurePages.push(i) })
+
+      for (let fi = 0; fi < figurePages.length; fi++) {
+        const p = figurePages[fi]
+        const prevFig = fi > 0 ? figurePages[fi - 1] : -1
+        // Steps on the text pages between the previous figure and this one.
+        const targets = steps.filter((s) => s.sourcePage > prevFig && s.sourcePage < p)
+        if (targets.length === 0) continue
+        let file: File
+        try {
+          file = await renderPageImage(pdf, p + 1) // pages are 1-based in pdf.js
+        } catch {
+          continue
+        }
+        const url = URL.createObjectURL(file)
+        urlsRef.current.push(url)
+        const img: JobGuideImage = { file, url, page: p + 1 }
+        for (const s of targets) s.jobGuideImage = img
+      }
+    }
+
+    setRawText(pages.join('\n'))
+    setDraftSteps(steps)
+    setPhase('review')
+  }
 
   async function handleFile(file: File) {
     if (file.type !== 'application/pdf') {
@@ -260,20 +381,19 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
       return
     }
     setError(null)
-    setPendingFile(file)
     setPhase('parsing')
     try {
-      const text = await extractPdfText(file)
-      if (!text.trim()) {
+      pdfRef.current?.destroy?.()
+      const pdf = await loadPdf(file)
+      pdfRef.current = pdf
+      const pages = await extractPagesText(pdf)
+      if (!pages.join('').trim()) {
         // No embedded text layer — almost certainly a scanned image.
         // Offer on-device OCR rather than failing.
         setPhase('needsOcr')
         return
       }
-      const parsed = parsePdf(text)
-      setRawText(text)
-      setDraftSteps(parsed)
-      setPhase('review')
+      await finalize(pages)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to read PDF.')
       setPhase('pick')
@@ -281,21 +401,19 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
   }
 
   async function runOcr() {
-    if (!pendingFile) return
+    const pdf = pdfRef.current
+    if (!pdf) return
     setError(null)
     setOcrProgress({ page: 0, total: 0, pct: 0 })
     setPhase('ocr')
     try {
-      const text = await ocrPdf(pendingFile, setOcrProgress)
-      if (!text.trim()) {
+      const pages = await ocrPages(pdf, setOcrProgress)
+      if (!pages.join('').trim()) {
         setError('OCR could not read any text. The scan may be too low-resolution or skewed.')
         setPhase('needsOcr')
         return
       }
-      const parsed = parsePdf(text)
-      setRawText(text)
-      setDraftSteps(parsed)
-      setPhase('review')
+      await finalize(pages)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'OCR failed.')
       setPhase('needsOcr')
@@ -308,7 +426,7 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
     try {
       for (let i = 0; i < draftSteps.length; i++) {
         const draft = draftSteps[i]
-        await upsertStep({
+        const saved = await upsertStep({
           procedure_id: procedure.id,
           step_number: draft.step_number,
           instruction: draft.instruction.trim(),
@@ -321,6 +439,10 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
           requires_confirmation: true,
           is_active: true,
         })
+        // Upload the matched figure (if any) now that we have the step id.
+        if (draft.jobGuideImage) {
+          await uploadJobGuideImage(saved.id, draft.jobGuideImage.file)
+        }
         setSaveProgress(i + 1)
       }
       onImported()
@@ -341,10 +463,16 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
   function addBlankStep() {
     setDraftSteps((prev) => [
       ...prev,
-      { step_number: prev.length + 1, instruction: '', warning: '', caution: '', note: '', is_critical: false, photo_required: false },
+      { step_number: prev.length + 1, instruction: '', warning: '', caution: '', note: '', is_critical: false, photo_required: false, sourcePage: -1 },
     ])
     setEditingIdx(draftSteps.length)
   }
+
+  function removeImage(idx: number) {
+    updateDraft(idx, { jobGuideImage: undefined })
+  }
+
+  const imagesMatched = draftSteps.filter((s) => s.jobGuideImage).length
 
   // ── Render ──
 
@@ -426,7 +554,7 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
             )}
             <div className="flex gap-3">
               <button
-                onClick={() => { setPendingFile(null); setError(null); setPhase('pick') }}
+                onClick={() => { pdfRef.current?.destroy?.(); pdfRef.current = null; setError(null); setPhase('pick') }}
                 className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 font-medium transition-colors"
               >
                 Choose a different file
@@ -503,6 +631,11 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
                     The PDF may not use numbered steps. Add steps manually below or cancel.
                   </p>
                 )}
+                {imagesMatched > 0 && (
+                  <p className="text-xs text-emerald-400 mt-0.5">
+                    🖼 {imagesMatched} step{imagesMatched !== 1 ? 's' : ''} matched to a job-guide image
+                  </p>
+                )}
               </div>
               <button
                 onClick={addBlankStep}
@@ -529,6 +662,7 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
                   onEdit={() => setEditingIdx(editingIdx === idx ? null : idx)}
                   onChange={(patch) => updateDraft(idx, patch)}
                   onRemove={() => { removeDraft(idx); if (editingIdx === idx) setEditingIdx(null) }}
+                  onRemoveImage={() => removeImage(idx)}
                 />
               ))}
             </div>
@@ -552,7 +686,7 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
 // ─── Draft step card ──────────────────────────────────────────────────────────
 
 function DraftStepCard({
-  draft, idx, isEditing, onEdit, onChange, onRemove,
+  draft, idx, isEditing, onEdit, onChange, onRemove, onRemoveImage,
 }: {
   draft: DraftStep
   idx: number
@@ -560,6 +694,7 @@ function DraftStepCard({
   onEdit: () => void
   onChange: (patch: Partial<DraftStep>) => void
   onRemove: () => void
+  onRemoveImage: () => void
 }) {
   const inp = 'w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-600 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm'
   const ta = `${inp} resize-none`
@@ -579,6 +714,7 @@ function DraftStepCard({
           {draft.warning && <span className="text-xs text-yellow-400">⚠</span>}
           {draft.caution && <span className="text-xs text-amber-400">⚡</span>}
           {draft.note && <span className="text-xs text-blue-400">ℹ</span>}
+          {draft.jobGuideImage && <span className="text-xs text-emerald-400" title={`Job-guide image from page ${draft.jobGuideImage.page}`}>🖼</span>}
           <button onClick={onEdit} className="text-xs px-2 py-0.5 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 transition-colors">
             {isEditing ? 'Done' : 'Edit'}
           </button>
@@ -614,6 +750,25 @@ function DraftStepCard({
             placeholder="Note (optional)"
             className={inp}
           />
+          {draft.jobGuideImage && (
+            <div className="flex items-start gap-3 p-2 bg-slate-950 border border-slate-700 rounded-lg">
+              <img
+                src={draft.jobGuideImage.url}
+                alt={`Job-guide figure from page ${draft.jobGuideImage.page}`}
+                className="h-24 w-auto rounded border border-slate-600 object-contain bg-white"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-300">Job-guide image</p>
+                <p className="text-xs text-slate-500 mt-0.5">Matched from page {draft.jobGuideImage.page}</p>
+                <button
+                  onClick={onRemoveImage}
+                  className="mt-2 text-xs px-2 py-1 bg-slate-700 hover:bg-red-900 rounded text-slate-300 hover:text-red-300 transition-colors"
+                >
+                  Remove image
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex gap-4 pt-1">
             <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
               <input
