@@ -105,15 +105,59 @@ async function ocrPdf(
 
 // ─── Pattern matching parser ──────────────────────────────────────────────────
 
+const append = (a: string, b: string) => (b ? (a ? `${a} ${b}` : b) : a)
+
+// Rejoin OCR word-breaks: a line ending in "word-" continues on the next line.
+function dehyphenate(lines: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
+    while (/[A-Za-z]-$/.test(line) && i + 1 < lines.length) {
+      line = line.slice(0, -1) + lines[i + 1].replace(/^\s+/, '')
+      i++
+    }
+    out.push(line)
+  }
+  return out
+}
+
+// Recognize scan noise that should never become step content: running headers,
+// disclosure footers, page numbers, figure identifiers, panel captions, and the
+// scattered character soup produced when OCR runs over a diagram/illustration.
+// Structural lines (steps, sub-steps, advisory labels) are matched BEFORE this
+// runs, so this only ever judges free text.
+function isNoise(l: string): boolean {
+  if (!l) return true
+  if (/^TO\s+\d/i.test(l)) return true                                   // running header (e.g. "TO 1C-130J-...")
+  if (/disclosur|disloare|copying and|govern?ed by|govemed by|title page of this|opti mis doe/i.test(l)) return true
+  if (/^00[\s-]?1[\s-]?0[\s-]?0[\s-]?1/i.test(l)) return true            // doc-number footer ("00-10-01" / "00 1 0 0 1")
+  if (/^[-\s|]+statement/i.test(l)) return true
+  if (/^\(?\d+-\d+(\s+blank)?\)?(\s*\/\s*\d+-?\d*)?$/.test(l)) return true // page numbers
+  if (/JG-\d/i.test(l)) return true                                       // figure/graphic identifiers
+  if (l === l.toUpperCase() && /[A-Z]/.test(l) && /(PANEL|CONSOLE|SHOWN|SIMILAR|TYPICAL)/.test(l)) return true // figure captions
+  if (/^\d{1,4}$/.test(l)) return true                                    // lone figure-callout number
+  if (/[|\\\][®=]/.test(l)) return true                                   // junk symbols (rare in real instructions)
+  if (/[A-Za-z]—[A-Za-z]/.test(l)) return true                            // OCR em-dash between letters (diagram artifact)
+  if (l.length <= 2) return true
+  // Scattered tiny tokens — diagram label fragments like "ON CX J", "CO OO Ob"
+  const toks = l.split(/\s+/)
+  const tiny = toks.filter((t) => t.replace(/[^A-Za-z0-9]/g, '').length <= 2).length
+  if (l.length <= 25 && toks.length >= 3 && tiny / toks.length >= 0.6) return true
+  if (l.length <= 6 && toks.length === 2 && tiny === 2) return true
+  return false
+}
+
 function parsePdf(text: string): DraftStep[] {
-  const lines = text.split(/\n|(?<=\.) (?=\d+\.)/g).map((l) => l.trim()).filter(Boolean)
+  let lines = text.split(/\n|(?<=\.) (?=\d+\.)/g).map((l) => l.trim()).filter(Boolean)
+  lines = dehyphenate(lines)
+
   const steps: DraftStep[] = []
   let current: DraftStep | null = null
 
   // In job guides, WARNING / CAUTION / NOTE blocks PRECEDE the step they apply
   // to — you read the advisory, then perform the action below it. So we buffer
   // advisories as we encounter them and attach them to the NEXT step that
-  // begins, not the step we just finished.
+  // begins (or, if sub-steps follow, to the step they sit inside).
   let pending = { warning: '', caution: '', note: '' }
   // Tracks where wrapped/continuation lines should be appended:
   //  'instruction' → current step's instruction
@@ -122,24 +166,31 @@ function parsePdf(text: string): DraftStep[] {
 
   const stepRegex = /^(\d+)[.)]\s+(.+)/
   const stepAltRegex = /^[Ss]tep\s+(\d+)[:.]\s+(.+)/
-  const warningRegex = /^WARNING[:\s]\s*(.+)/i
-  const cautionRegex = /^CAUTION[:\s]\s*(.+)/i
-  const noteRegex = /^NOTE[:\s]\s*(.+)/i
-
-  const append = (a: string, b: string) => (a ? `${a} ${b}` : b)
+  const subStepRegex = /^[a-z][.)]\s+/
+  // Advisory label: "CAUTION" alone on a line OR "CAUTION: text" inline.
+  const advRegex = /^(WARNING|CAUTION|NOTE)\b[:.\s]*(.*)$/i
 
   function flush() {
     if (current) steps.push({ ...current })
   }
+  function bindPendingTo(target: DraftStep) {
+    target.warning = append(target.warning, pending.warning)
+    target.caution = append(target.caution, pending.caution)
+    target.note = append(target.note, pending.note)
+    pending = { warning: '', caution: '', note: '' }
+  }
 
-  for (const line of lines) {
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+
+    // 1. New numbered step — advisories seen above bind to THIS (the post step).
     const stepMatch = line.match(stepRegex) ?? line.match(stepAltRegex)
     if (stepMatch) {
       flush()
       current = {
         step_number: parseInt(stepMatch[1], 10),
         instruction: stepMatch[2].trim(),
-        // Bind any advisories that appeared above this step to this step.
         warning: pending.warning,
         caution: pending.caution,
         note: pending.note,
@@ -151,28 +202,29 @@ function parsePdf(text: string): DraftStep[] {
       continue
     }
 
-    const warnMatch = line.match(warningRegex)
-    if (warnMatch) {
-      pending.warning = append(pending.warning, warnMatch[1])
-      cont = 'warning'
+    // 2. Advisory label (own-line or inline).
+    const advMatch = line.match(advRegex)
+    if (advMatch) {
+      const kind = advMatch[1].toLowerCase() as 'warning' | 'caution' | 'note'
+      cont = kind
+      if (advMatch[2].trim()) pending[kind] = append(pending[kind], advMatch[2].trim())
       continue
     }
 
-    const cautionMatch = line.match(cautionRegex)
-    if (cautionMatch) {
-      pending.caution = append(pending.caution, cautionMatch[1])
-      cont = 'caution'
+    // 3. Sub-step (a. b. c.) belongs to the CURRENT step; any advisory that
+    //    appeared mid-step (between the parent step and its sub-steps) binds here.
+    if (current && subStepRegex.test(line)) {
+      bindPendingTo(current)
+      current.instruction = append(current.instruction, line)
+      cont = 'instruction'
       continue
     }
 
-    const noteMatch = line.match(noteRegex)
-    if (noteMatch) {
-      pending.note = append(pending.note, noteMatch[1])
-      cont = 'note'
-      continue
-    }
+    // 4. Free text that isn't structural — drop scan noise before treating it
+    //    as continuation.
+    if (isNoise(line)) continue
 
-    // Continuation (wrapped) line — append to whatever block we're inside.
+    // 5. Continuation (wrapped) line — append to whatever block we're inside.
     if (cont === 'warning') pending.warning = append(pending.warning, line)
     else if (cont === 'caution') pending.caution = append(pending.caution, line)
     else if (cont === 'note') pending.note = append(pending.note, line)
@@ -183,12 +235,7 @@ function parsePdf(text: string): DraftStep[] {
 
   // Trailing advisories that never got a following step: attach to the last
   // step so they aren't lost (rare — advisories normally precede a step).
-  if (steps.length) {
-    const last = steps[steps.length - 1]
-    if (pending.warning) last.warning = append(last.warning, pending.warning)
-    if (pending.caution) last.caution = append(last.caution, pending.caution)
-    if (pending.note) last.note = append(last.note, pending.note)
-  }
+  if (steps.length) bindPendingTo(steps[steps.length - 1])
 
   return steps
 }
