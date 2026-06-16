@@ -60,6 +60,7 @@ export interface OjtProcedureStep {
   caution: string | null
   note: string | null
   image_path: string | null
+  job_guide_image_path: string | null
   requires_confirmation: boolean
   is_critical: boolean
   photo_required: boolean
@@ -502,6 +503,18 @@ export async function uploadStepImage(stepId: string, file: File): Promise<strin
   if (error) throw error
   // Update step with new image path
   await supabase.from('ojt_procedure_steps').update({ image_path: filePath }).eq('id', stepId)
+  return filePath
+}
+
+export async function uploadJobGuideImage(stepId: string, file: File): Promise<string> {
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const filePath = `steps/${stepId}/jobguide-${Date.now()}.${ext}`
+  const { error } = await supabase.storage
+    .from('ojt-content')
+    .upload(filePath, file, { upsert: true })
+  if (error) throw error
+  // Update step with new job guide image path
+  await supabase.from('ojt_procedure_steps').update({ job_guide_image_path: filePath }).eq('id', stepId)
   return filePath
 }
 

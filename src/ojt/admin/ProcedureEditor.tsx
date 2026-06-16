@@ -6,6 +6,7 @@ import {
   upsertStep,
   deleteStep,
   uploadStepImage,
+  uploadJobGuideImage,
   upsertProcedure,
 } from '../../db/ojt'
 import { QuizEditor } from './QuizEditor'
@@ -71,6 +72,11 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
 
   async function handleImageUpload(stepId: string, file: File) {
     await uploadStepImage(stepId, file)
+    void load()
+  }
+
+  async function handleJobGuideUpload(stepId: string, file: File) {
+    await uploadJobGuideImage(stepId, file)
     void load()
   }
 
@@ -171,6 +177,7 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
           onSave={saveStep}
           onCancel={() => setEditingStep(null)}
           onImageUpload={editingStep.id ? (f) => handleImageUpload(editingStep.id!, f) : undefined}
+          onJobGuideUpload={editingStep.id ? (f) => handleJobGuideUpload(editingStep.id!, f) : undefined}
         />
       )}
 
@@ -196,6 +203,7 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
                     <span className="text-xs font-mono text-slate-500">STEP {step.step_number}</span>
                     {step.is_critical && <span className="text-xs text-red-400">CRITICAL</span>}
                     {step.photo_required && <span className="text-xs text-violet-400">📸 Photo</span>}
+                    {step.job_guide_image_path && <span className="text-xs text-green-400">📄 Job Guide</span>}
                     {step.kc_question && <span className="text-xs text-blue-400">KC</span>}
                   </div>
                   <p className="text-sm text-white line-clamp-2">{step.instruction}</p>
@@ -264,12 +272,14 @@ function StepForm({
   onSave,
   onCancel,
   onImageUpload,
+  onJobGuideUpload,
 }: {
   step: Partial<OjtProcedureStep>
   procedureId: string
   onSave: (s: Partial<OjtProcedureStep> & { procedure_id: string; instruction: string }) => void
   onCancel: () => void
   onImageUpload?: (file: File) => void
+  onJobGuideUpload?: (file: File) => void
 }) {
   const [form, setForm] = useState({
     instruction: step.instruction ?? '',
@@ -349,10 +359,28 @@ function StepForm({
           <input value={form.photo_instructions} onChange={(e) => setForm((f) => ({ ...f, photo_instructions: e.target.value }))} placeholder="Photo capture instructions" className={inp} />
         )}
 
-        {/* Image upload (only for existing steps) */}
+        {/* Image uploads (only for existing steps) */}
+        {step.id && onJobGuideUpload && (
+          <div>
+            <p className="text-xs text-slate-300 mb-1">
+              Job Guide image
+              {step.job_guide_image_path && <span className="text-green-400 ml-1.5">✓ uploaded</span>}
+            </p>
+            <p className="text-xs text-slate-500 mb-1">Shown on the right of the step screen; gives the trainee location/visual guidance.</p>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onJobGuideUpload(f) }}
+              className="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-violet-700 file:text-white file:text-xs"
+            />
+          </div>
+        )}
         {step.id && onImageUpload && (
           <div>
-            <p className="text-xs text-slate-500 mb-1">Reference image</p>
+            <p className="text-xs text-slate-500 mb-1">
+              Reference image (optional)
+              {step.image_path && <span className="text-green-400 ml-1.5">✓ uploaded</span>}
+            </p>
             <input
               type="file"
               accept="image/*"

@@ -29,6 +29,8 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
   const [confirmed, setConfirmed] = useState(false)  // brief flash before auto-advance
   const [showImage, setShowImage] = useState(false)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [jobGuideUrl, setJobGuideUrl] = useState<string | null>(null)
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Load existing responses on mount
@@ -53,10 +55,14 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
   // Resolve signed URL for step reference image; clear photo error on step change
   useEffect(() => {
     setImageUrl(null)
+    setJobGuideUrl(null)
     setShowImage(false)
     setPhotoError(null)
     if (step?.image_path) {
       getSignedUrl(step.image_path).then(setImageUrl).catch(console.error)
+    }
+    if (step?.job_guide_image_path) {
+      getSignedUrl(step.job_guide_image_path).then(setJobGuideUrl).catch(console.error)
     }
   }, [step?.id])
 
@@ -209,7 +215,10 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
       </div>
 
       {/* Step content */}
-      <div className="flex-1 overflow-auto px-4 py-5 max-w-2xl mx-auto w-full">
+      <div className={`flex-1 overflow-auto px-4 py-5 w-full mx-auto ${jobGuideUrl ? 'max-w-5xl' : 'max-w-2xl'}`}>
+        <div className={`flex flex-col gap-6 ${jobGuideUrl ? 'lg:flex-row lg:items-start' : ''}`}>
+        {/* LEFT COLUMN — instruction + all interactions */}
+        <div className={jobGuideUrl ? 'lg:flex-1 lg:min-w-0' : ''}>
         {/* Step number + critical badge */}
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs font-mono text-slate-500">STEP {step.step_number}</span>
@@ -402,7 +411,50 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
             )}
           </div>
         )}
+        </div>
+        {/* END LEFT COLUMN */}
+
+        {/* RIGHT COLUMN — Job Guide image */}
+        {jobGuideUrl && (
+          <div className="lg:w-[44%] lg:flex-shrink-0 lg:sticky lg:top-4">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">📄 Job Guide</p>
+            <button
+              onClick={() => setZoomUrl(jobGuideUrl)}
+              className="block w-full rounded-xl border border-slate-700 overflow-hidden bg-slate-950"
+            >
+              <img
+                src={jobGuideUrl}
+                alt="Job Guide reference"
+                className="w-full object-contain max-h-[70vh]"
+              />
+            </button>
+            <p className="text-xs text-slate-500 mt-1.5 text-center">Tap image to enlarge</p>
+          </div>
+        )}
+        {/* END RIGHT COLUMN */}
+        </div>
       </div>
+
+      {/* Fullscreen zoom modal */}
+      {zoomUrl && (
+        <div
+          onClick={() => setZoomUrl(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+        >
+          <button
+            onClick={() => setZoomUrl(null)}
+            className="absolute top-4 right-4 text-white text-2xl leading-none w-10 h-10 flex items-center justify-center rounded-full bg-slate-800/80 hover:bg-slate-700"
+          >
+            ✕
+          </button>
+          <img
+            src={zoomUrl}
+            alt="Job Guide enlarged"
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       {/* Navigation footer */}
       <div className="bg-slate-950 border-t border-slate-800 px-4 py-3 flex gap-3 flex-shrink-0">
