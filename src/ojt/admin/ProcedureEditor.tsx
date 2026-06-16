@@ -13,6 +13,8 @@ import { QuizEditor } from './QuizEditor'
 
 // Lazy-load ExcelImport so xlsx is only fetched when needed
 const ExcelImport = lazy(() => import('./ExcelImport').then((m) => ({ default: m.ExcelImport })))
+// Lazy-load PdfImport so pdfjs-dist is only fetched when needed
+const PdfImport = lazy(() => import('./PdfImport').then((m) => ({ default: m.PdfImport })))
 
 interface Props {
   procedure: OjtProcedure
@@ -25,6 +27,7 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
   const [editingStep, setEditingStep] = useState<Partial<OjtProcedureStep> | null>(null)
   const [editingProcedure, setEditingProcedure] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showPdfImport, setShowPdfImport] = useState(false)
   const [showQuiz, setShowQuiz] = useState(false)
   const [procForm, setProcForm] = useState({
     title: procedure.title,
@@ -145,6 +148,22 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
         </Suspense>
       )}
 
+      {/* PDF Import overlay — lazy-loaded so pdfjs-dist only downloads on demand */}
+      {showPdfImport && (
+        <Suspense fallback={
+          <div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        }>
+          <PdfImport
+            procedure={procedure}
+            existingStepCount={steps.length}
+            onImported={() => { setShowPdfImport(false); void load() }}
+            onCancel={() => setShowPdfImport(false)}
+          />
+        </Suspense>
+      )}
+
       {/* Steps */}
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm font-semibold text-slate-300">{steps.filter((s) => s.is_active).length} Steps</p>
@@ -160,6 +179,12 @@ export function ProcedureEditor({ procedure, onBack }: Props) {
             className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
           >
             📊 Import Spreadsheet
+          </button>
+          <button
+            onClick={() => setShowPdfImport(true)}
+            className="text-sm px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+          >
+            📄 Import PDF
           </button>
           <button
             onClick={() => setEditingStep({ procedure_id: procedure.id, sort_order: steps.length, step_number: steps.length + 1, requires_confirmation: true, is_critical: false, photo_required: false, is_active: true })}

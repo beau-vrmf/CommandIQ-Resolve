@@ -1,6 +1,10 @@
 // PDF Import Wizard — extracts text from a PDF and uses pattern matching to
 // populate draft steps for admin review before saving. No AI/API key required.
-// Future upgrade: replace parsePdf() with an edge function call to Claude API.
+//
+// For scanned-image PDFs (no embedded text layer), falls back to on-device OCR
+// via Tesseract.js: each page is rendered to a canvas in the browser and the
+// characters are recognized locally. The page images never leave the device —
+// only the OCR engine/model is fetched from a CDN (contains no user content).
 
 import { useState, useRef } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -28,7 +32,7 @@ interface Props {
   onCancel: () => void
 }
 
-type Phase = 'pick' | 'parsing' | 'review' | 'saving'
+type Phase = 'pick' | 'parsing' | 'needsOcr' | 'ocr' | 'review' | 'saving'
 
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
@@ -43,6 +47,58 @@ async function extractPdfText(file: File): Promise<string> {
       .map((item) => ('str' in item ? item.str : ''))
       .join(' ')
     pages.push(pageText)
+  }
+  return pages.join('\n')
+}
+
+// ─── On-device OCR (scanned PDFs) ───────────────────────────────────────────────
+// Renders each page to a canvas, then recognizes characters locally with
+// Tesseract.js. Tesseract is dynamically imported so its wasm core only loads
+// when OCR is actually needed.
+
+interface OcrProgress { page: number; total: number; pct: number }
+
+async function ocrPdf(
+  file: File,
+  onProgress: (p: OcrProgress) => void,
+): Promise<string> {
+  const { createWorker } = await import('tesseract.js')
+  const buffer = await file.arrayBuffer()
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+
+  let curPage = 0
+  const totalPages = pdf.numPages
+  const worker = await createWorker('eng', 1, {
+    logger: (m: { status: string; progress: number }) => {
+      if (m.status === 'recognizing text') {
+        onProgress({ page: curPage, total: totalPages, pct: m.progress })
+      }
+    },
+  })
+
+  const pages: string[] = []
+  try {
+    for (let i = 1; i <= totalPages; i++) {
+      curPage = i
+      onProgress({ page: i, total: totalPages, pct: 0 })
+      const page = await pdf.getPage(i)
+      // Scale 2x for sharper text — improves OCR accuracy on dense pages
+      const viewport = page.getViewport({ scale: 2 })
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Could not create canvas context for OCR.')
+      await page.render({ canvas, canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise
+      const { data } = await worker.recognize(canvas)
+      pages.push(data.text)
+      onProgress({ page: i, total: totalPages, pct: 1 })
+      // Free memory between pages
+      canvas.width = 0
+      canvas.height = 0
+    }
+  } finally {
+    await worker.terminate()
   }
   return pages.join('\n')
 }
@@ -123,6 +179,8 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saveProgress, setSaveProgress] = useState(0)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [ocrProgress, setOcrProgress] = useState<OcrProgress | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function handleFile(file: File) {
@@ -131,12 +189,14 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
       return
     }
     setError(null)
+    setPendingFile(file)
     setPhase('parsing')
     try {
       const text = await extractPdfText(file)
       if (!text.trim()) {
-        setError('No readable text found in this PDF. It may be a scanned image — those require OCR software first.')
-        setPhase('pick')
+        // No embedded text layer — almost certainly a scanned image.
+        // Offer on-device OCR rather than failing.
+        setPhase('needsOcr')
         return
       }
       const parsed = parsePdf(text)
@@ -146,6 +206,28 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to read PDF.')
       setPhase('pick')
+    }
+  }
+
+  async function runOcr() {
+    if (!pendingFile) return
+    setError(null)
+    setOcrProgress({ page: 0, total: 0, pct: 0 })
+    setPhase('ocr')
+    try {
+      const text = await ocrPdf(pendingFile, setOcrProgress)
+      if (!text.trim()) {
+        setError('OCR could not read any text. The scan may be too low-resolution or skewed.')
+        setPhase('needsOcr')
+        return
+      }
+      const parsed = parsePdf(text)
+      setRawText(text)
+      setDraftSteps(parsed)
+      setPhase('review')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'OCR failed.')
+      setPhase('needsOcr')
     }
   }
 
@@ -220,7 +302,7 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
               <p className="text-slate-400 text-sm mt-1 max-w-xs">
                 Numbered steps (1. 2. 3.) and WARNING / CAUTION / NOTE labels will be detected automatically.
               </p>
-              <p className="text-slate-500 text-xs mt-2">Text-based PDFs only — scanned image PDFs won't work.</p>
+              <p className="text-slate-500 text-xs mt-2">Scanned (image) PDFs are supported too — you'll be offered on-device OCR.</p>
             </div>
             {error && (
               <div className="w-full p-3 bg-red-900/20 border border-red-800 rounded-lg text-xs text-red-300">
@@ -248,6 +330,70 @@ export function PdfImport({ procedure, existingStepCount, onImported, onCancel }
           <div className="flex flex-col items-center justify-center min-h-64 gap-3">
             <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
             <p className="text-slate-400 text-sm">Reading PDF…</p>
+          </div>
+        )}
+
+        {/* ── Phase: needsOcr (scanned PDF — offer OCR) ── */}
+        {phase === 'needsOcr' && (
+          <div className="flex flex-col items-center justify-center min-h-64 gap-5">
+            <div className="text-center max-w-sm">
+              <div className="text-4xl mb-3">🔎</div>
+              <p className="text-white font-medium">This PDF has no text layer</p>
+              <p className="text-slate-400 text-sm mt-1">
+                It looks like a scanned image. Run on-device OCR to recognize the text — the
+                pages stay on this device; only the OCR engine is downloaded.
+              </p>
+              <p className="text-slate-500 text-xs mt-2">
+                This can take several seconds per page, and accuracy depends on scan quality.
+                You can review and fix the result before saving.
+              </p>
+            </div>
+            {error && (
+              <div className="w-full p-3 bg-red-900/20 border border-red-800 rounded-lg text-xs text-red-300">
+                {error}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setPendingFile(null); setError(null); setPhase('pick') }}
+                className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 font-medium transition-colors"
+              >
+                Choose a different file
+              </button>
+              <button
+                onClick={runOcr}
+                className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium transition-colors"
+              >
+                Run OCR
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Phase: ocr (running) ── */}
+        {phase === 'ocr' && (
+          <div className="flex flex-col items-center justify-center min-h-64 gap-4">
+            <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+            <div className="text-center">
+              <p className="text-slate-300 text-sm">
+                {ocrProgress && ocrProgress.total > 0
+                  ? `Recognizing text — page ${ocrProgress.page} of ${ocrProgress.total}`
+                  : 'Loading OCR engine…'}
+              </p>
+              {ocrProgress && ocrProgress.total > 0 && (
+                <div className="mt-3 w-56 h-1.5 bg-slate-800 rounded-full overflow-hidden mx-auto">
+                  <div
+                    className="h-full bg-violet-500 rounded-full transition-all duration-200"
+                    style={{
+                      width: `${Math.round(
+                        ((ocrProgress.page - 1 + ocrProgress.pct) / ocrProgress.total) * 100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+              )}
+              <p className="text-slate-500 text-xs mt-2">Keep this screen open until it finishes.</p>
+            </div>
           </div>
         )}
 
