@@ -110,11 +110,23 @@ function parsePdf(text: string): DraftStep[] {
   const steps: DraftStep[] = []
   let current: DraftStep | null = null
 
+  // In job guides, WARNING / CAUTION / NOTE blocks PRECEDE the step they apply
+  // to — you read the advisory, then perform the action below it. So we buffer
+  // advisories as we encounter them and attach them to the NEXT step that
+  // begins, not the step we just finished.
+  let pending = { warning: '', caution: '', note: '' }
+  // Tracks where wrapped/continuation lines should be appended:
+  //  'instruction' → current step's instruction
+  //  'warning' | 'caution' | 'note' → the matching pending advisory buffer
+  let cont: 'instruction' | 'warning' | 'caution' | 'note' | null = null
+
   const stepRegex = /^(\d+)[.)]\s+(.+)/
   const stepAltRegex = /^[Ss]tep\s+(\d+)[:.]\s+(.+)/
   const warningRegex = /^WARNING[:\s]\s*(.+)/i
   const cautionRegex = /^CAUTION[:\s]\s*(.+)/i
   const noteRegex = /^NOTE[:\s]\s*(.+)/i
+
+  const append = (a: string, b: string) => (a ? `${a} ${b}` : b)
 
   function flush() {
     if (current) steps.push({ ...current })
@@ -127,45 +139,57 @@ function parsePdf(text: string): DraftStep[] {
       current = {
         step_number: parseInt(stepMatch[1], 10),
         instruction: stepMatch[2].trim(),
-        warning: '',
-        caution: '',
-        note: '',
+        // Bind any advisories that appeared above this step to this step.
+        warning: pending.warning,
+        caution: pending.caution,
+        note: pending.note,
         is_critical: false,
         photo_required: false,
       }
+      pending = { warning: '', caution: '', note: '' }
+      cont = 'instruction'
       continue
     }
 
-    if (!current) continue  // Ignore pre-step text
-
     const warnMatch = line.match(warningRegex)
     if (warnMatch) {
-      current.warning = current.warning
-        ? `${current.warning} ${warnMatch[1]}`
-        : warnMatch[1]
+      pending.warning = append(pending.warning, warnMatch[1])
+      cont = 'warning'
       continue
     }
 
     const cautionMatch = line.match(cautionRegex)
     if (cautionMatch) {
-      current.caution = current.caution
-        ? `${current.caution} ${cautionMatch[1]}`
-        : cautionMatch[1]
+      pending.caution = append(pending.caution, cautionMatch[1])
+      cont = 'caution'
       continue
     }
 
     const noteMatch = line.match(noteRegex)
     if (noteMatch) {
-      current.note = current.note
-        ? `${current.note} ${noteMatch[1]}`
-        : noteMatch[1]
+      pending.note = append(pending.note, noteMatch[1])
+      cont = 'note'
       continue
     }
 
-    // Continuation line — append to instruction
-    current.instruction = `${current.instruction} ${line}`
+    // Continuation (wrapped) line — append to whatever block we're inside.
+    if (cont === 'warning') pending.warning = append(pending.warning, line)
+    else if (cont === 'caution') pending.caution = append(pending.caution, line)
+    else if (cont === 'note') pending.note = append(pending.note, line)
+    else if (cont === 'instruction' && current) current.instruction = append(current.instruction, line)
+    // else: prose before the first step with no advisory context — ignore.
   }
   flush()
+
+  // Trailing advisories that never got a following step: attach to the last
+  // step so they aren't lost (rare — advisories normally precede a step).
+  if (steps.length) {
+    const last = steps[steps.length - 1]
+    if (pending.warning) last.warning = append(last.warning, pending.warning)
+    if (pending.caution) last.caution = append(last.caution, pending.caution)
+    if (pending.note) last.note = append(last.note, pending.note)
+  }
+
   return steps
 }
 
