@@ -2,15 +2,22 @@
 // Builds the detector + detection map for the chosen area and hands off to CameraScan.
 
 import { useEffect, useState } from 'react'
-import { ScanArea, getAreas, getDetectionMap, ScanComponent } from '../db/scan'
+import {
+  ScanArea,
+  getAreas,
+  getDetectionMap,
+  getReferenceScan,
+  ReferenceScanData,
+  ScanComponent,
+} from '../db/scan'
 import { createGuidedDetector } from '../recognition/guidedDetector'
 import { Detector } from '../recognition/detector'
 import { CameraScan } from './CameraScan'
+import { ReferenceScan } from './ReferenceScan'
 
-type Launch = {
-  detector: Detector
-  detectionMap: Map<string, ScanComponent>
-}
+type Launch =
+  | { mode: 'camera'; detector: Detector; detectionMap: Map<string, ScanComponent> }
+  | { mode: 'reference'; data: ReferenceScanData }
 
 export function AircraftSelect() {
   const [areas, setAreas] = useState<ScanArea[]>([])
@@ -35,18 +42,28 @@ export function AircraftSelect() {
   async function startScan(area: ScanArea) {
     setStarting(true)
     try {
-      // MVP recognition uses the guided detector; CV swaps in behind the same
-      // Detector seam once a model exists.
+      // Areas with a reference photo use reference-image mode (fixed backdrop +
+      // hotspots). Otherwise fall back to live-camera guided recognition; CV
+      // swaps in behind the same Detector seam once a model exists.
+      if (area.reference_image_url) {
+        const data = await getReferenceScan(area.aircraft, area.area)
+        if (data) {
+          setLaunch({ mode: 'reference', data })
+          return
+        }
+      }
       const detector = createGuidedDetector(area.aircraft, area.area)
       const detectionMap = await getDetectionMap(area.aircraft, area.area)
-      setLaunch({ detector, detectionMap })
+      setLaunch({ mode: 'camera', detector, detectionMap })
     } finally {
       setStarting(false)
     }
   }
 
   if (launch) {
-    return (
+    return launch.mode === 'reference' ? (
+      <ReferenceScan data={launch.data} onExit={() => setLaunch(null)} />
+    ) : (
       <CameraScan
         detector={launch.detector}
         detectionMap={launch.detectionMap}

@@ -43,16 +43,35 @@ export interface ScanArea {
   system: string | null
   sort_order: number
   is_active: boolean
+  // For reference-image scan mode: a fixed photo of the area used as the scan
+  // backdrop. When null, the area uses live-camera mode instead.
+  reference_image_url: string | null
 }
 
 // Decouples the recognition model from content: detector emits a class_label,
 // which maps to a component. Retrain/relabel without touching content rows.
+// pos_* are the hotspot box (normalized 0..1) for reference-image / guided modes.
 export interface ScanDetection {
   id: string
   class_label: string
   component_id: string
   aircraft: string
   area: string
+  pos_x: number | null
+  pos_y: number | null
+  pos_w: number | null
+  pos_h: number | null
+}
+
+// A component placed at a position over the reference image (or camera frame).
+export interface Hotspot {
+  component: ScanComponent
+  bbox: { x: number; y: number; width: number; height: number }
+}
+
+export interface ReferenceScanData {
+  area: ScanArea
+  hotspots: Hotspot[]
 }
 
 // ─── Public reads (published rows only; no auth required) ─────────────────────
@@ -120,6 +139,40 @@ export async function getDetectionMap(
     if (comp) map.set(d.class_label, comp)
   }
   return map
+}
+
+// Reference-image scan: the area's backdrop photo + each component's hotspot.
+export async function getReferenceScan(
+  aircraft: string,
+  area: string,
+): Promise<ReferenceScanData | null> {
+  const { data: areaRow, error: ae } = await supabase
+    .from('scan_areas')
+    .select('*')
+    .eq('aircraft', aircraft)
+    .eq('area', area)
+    .limit(1)
+    .maybeSingle()
+  if (ae) throw ae
+  if (!areaRow || !(areaRow as ScanArea).reference_image_url) return null
+
+  const [{ data: dets, error: de }, components] = await Promise.all([
+    supabase.from('scan_detections').select('*').eq('aircraft', aircraft).eq('area', area),
+    getPublishedComponents(aircraft, area),
+  ])
+  if (de) throw de
+
+  const byId = new Map(components.map((c) => [c.id, c]))
+  const hotspots: Hotspot[] = []
+  for (const d of (dets || []) as ScanDetection[]) {
+    const component = byId.get(d.component_id)
+    if (!component || d.pos_x == null || d.pos_y == null) continue
+    hotspots.push({
+      component,
+      bbox: { x: d.pos_x, y: d.pos_y, width: d.pos_w ?? 0.06, height: d.pos_h ?? 0.08 },
+    })
+  }
+  return { area: areaRow as ScanArea, hotspots }
 }
 
 // ─── Admin reads/writes (RLS restricts writes to admin/SME roles) ─────────────
