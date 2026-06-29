@@ -1,43 +1,93 @@
-// Demo/tutorial scan: aim at a room, capture a still, and the on-device AI tags
-// a few everyday objects (~25%). On the frozen frame you can tap any tag to view
-// it, rename it (e.g. fix a wrong AI guess), or delete it — and add your own tags
-// to objects it missed. Capturing a still (rather than tagging live video) keeps
-// every tag locked to its object instead of drifting as the camera moves.
-// Fully local/offline-capable: no Supabase, no auth. Tags are session-only.
+// Demo/tutorial scan — live room scanning.
+//
+// As you scan, the on-device AI recognizes objects and labels them live (teal);
+// the labels follow their objects because we re-detect each tick and match
+// detections to persistent "tracks" (a lightweight centroid tracker).
+//
+// "Capture" freezes the frame so you can ADD or EDIT tags precisely. A manual
+// tag (blue) anchors to the object under your finger and then follows that
+// object once you resume scanning. Objects the AI can't detect at all have
+// nothing to anchor to, so those tags can't track (stated limitation).
+//
+// Fully local: no Supabase, no auth. Tags are session-only.
 
 import { useEffect, useRef, useState } from 'react'
+import { Detection } from '../recognition/detector'
 import { createObjectDetector } from '../recognition/objectDetector'
 
 interface Props {
   onExit: () => void
 }
 
-type TagSource = 'ai' | 'manual'
-interface Tag {
+// A detected object given a stable id across frames.
+interface Track {
+  id: string
+  cls: string
+  cx: number
+  cy: number
+  missed: number
+}
+
+interface ManualTag {
   id: string
   name: string
-  source: TagSource
-  // Normalized to the captured image (0..1), anchored at the object center.
-  x: number
+  trackId: string | null // anchored object; null = unanchored (can't follow)
+  x: number // last known center (fallback when the track is lost)
   y: number
 }
 
 const detector = createObjectDetector()
+const MATCH_DIST = 0.1 // normalized centroid distance to consider "same object"
+const MAX_MISS = 8 // ticks a track survives unseen before being dropped
+const ANCHOR_DIST = 0.15 // how close a tap must be to a track to anchor
+
+// Match new detections to existing tracks by class + nearest centroid.
+function updateTracks(prev: Track[], dets: Detection[]): Track[] {
+  const next: Track[] = []
+  const used = new Set<string>()
+  for (const d of dets) {
+    const cx = d.bbox.x + d.bbox.width / 2
+    const cy = d.bbox.y + d.bbox.height / 2
+    let best: Track | null = null
+    let bestDist = MATCH_DIST
+    for (const t of prev) {
+      if (used.has(t.id) || t.cls !== d.classLabel) continue
+      const dist = Math.hypot(t.cx - cx, t.cy - cy)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = t
+      }
+    }
+    if (best) {
+      used.add(best.id)
+      next.push({ ...best, cx, cy, missed: 0 })
+    } else {
+      next.push({ id: crypto.randomUUID(), cls: d.classLabel, cx, cy, missed: 0 })
+    }
+  }
+  // Keep recently-unseen tracks briefly so a one-frame miss doesn't drop a tag.
+  for (const t of prev) {
+    if (!used.has(t.id) && t.missed < MAX_MISS) next.push({ ...t, missed: t.missed + 1 })
+  }
+  return next
+}
 
 export function DemoScan({ onExit }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const frameRef = useRef<HTMLDivElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const tracksRef = useRef<Track[]>([])
 
   const [error, setError] = useState<string | null>(null)
   const [showIntro, setShowIntro] = useState(true)
-  const [busy, setBusy] = useState(false)
+  const [loadingModel, setLoadingModel] = useState(true)
 
-  // Captured-frame state
-  const [captured, setCaptured] = useState<string | null>(null)
-  const [tags, setTags] = useState<Tag[]>([])
-  const [editingId, setEditingId] = useState<string | null>(null)
+  const [tracks, setTracks] = useState<Track[]>([])
+  const [manualTags, setManualTags] = useState<ManualTag[]>([])
+
+  const [frozen, setFrozen] = useState<string | null>(null) // dataURL when paused
   const [adding, setAdding] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   // Open the rear camera (same plumbing as CameraScan).
   useEffect(() => {
@@ -73,73 +123,107 @@ export function DemoScan({ onExit }: Props) {
     }
   }, [])
 
-  // Freeze the current frame and run the detector once on it.
-  async function capture() {
+  // Live detection loop (paused while frozen). Updates tracks + manual tag positions.
+  useEffect(() => {
+    if (error || showIntro || frozen) return
+    let active = true
+    const interval = setInterval(async () => {
+      const video = videoRef.current
+      if (!video || video.readyState < 2) return
+      try {
+        const dets = await detector.detect(video)
+        if (!active) return
+        const next = updateTracks(tracksRef.current, dets)
+        tracksRef.current = next
+        setTracks(next)
+        setManualTags((prev) =>
+          prev.map((m) => {
+            if (!m.trackId) return m
+            const t = next.find((t) => t.id === m.trackId)
+            return t ? { ...m, x: t.cx, y: t.cy } : m
+          }),
+        )
+        setLoadingModel(false)
+      } catch {
+        // transient errors: keep last positions
+      }
+    }, 350)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [error, showIntro, frozen])
+
+  // Capture: freeze the frame for adding/editing tags.
+  function capture() {
     const video = videoRef.current
     if (!video || video.readyState < 2) return
-    setBusy(true)
-    try {
-      const w = video.videoWidth
-      const h = video.videoHeight
-      const canvas = document.createElement('canvas')
-      canvas.width = w
-      canvas.height = h
-      canvas.getContext('2d')!.drawImage(video, 0, 0, w, h)
+    const w = video.videoWidth
+    const h = video.videoHeight
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    canvas.getContext('2d')!.drawImage(video, 0, 0, w, h)
+    setFrozen(canvas.toDataURL('image/jpeg', 0.85))
+    setAdding(false)
+    setEditingId(null)
+  }
 
-      const detections = await detector.detect(video)
-      const aiTags: Tag[] = detections.map((d) => ({
-        id: crypto.randomUUID(),
-        name: d.classLabel,
-        source: 'ai',
-        x: d.bbox.x + d.bbox.width / 2,
-        y: d.bbox.y + d.bbox.height / 2,
-      }))
+  function resume() {
+    setFrozen(null)
+    setAdding(false)
+    setEditingId(null)
+  }
 
-      setTags(aiTags)
-      setCaptured(canvas.toDataURL('image/jpeg', 0.85))
-    } catch {
-      setError('Recognition failed. Try capturing again.')
-    } finally {
-      setBusy(false)
+  // In frozen mode: tap an object to drop a manual tag anchored to it.
+  function handleAddClick(e: React.MouseEvent) {
+    if (!adding || !wrapRef.current) return
+    const rect = wrapRef.current.getBoundingClientRect()
+    const nx = (e.clientX - rect.left) / rect.width
+    const ny = (e.clientY - rect.top) / rect.height
+
+    // Anchor to the nearest tracked object within range, else leave unanchored.
+    let best: Track | null = null
+    let bestDist = ANCHOR_DIST
+    for (const t of tracksRef.current) {
+      const dist = Math.hypot(t.cx - nx, t.cy - ny)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = t
+      }
+    }
+    const id = crypto.randomUUID()
+    setManualTags((m) => [
+      ...m,
+      { id, name: '', trackId: best?.id ?? null, x: best?.cx ?? nx, y: best?.cy ?? ny },
+    ])
+    setAdding(false)
+    setEditingId(id)
+  }
+
+  // Tap a tag (frozen mode): edit existing manual tag, or promote an AI label.
+  function tapTag(track: Track | null, manual: ManualTag | null) {
+    if (manual) {
+      setEditingId(manual.id)
+      return
+    }
+    if (track) {
+      const id = crypto.randomUUID()
+      setManualTags((m) => [...m, { id, name: track.cls, trackId: track.id, x: track.cx, y: track.cy }])
+      setEditingId(id)
     }
   }
 
-  function rescan() {
-    setCaptured(null)
-    setTags([])
-    setEditingId(null)
-    setAdding(false)
-  }
-
-  // Add a manual tag where the user tapped the frozen image.
-  function handleFrameClick(e: React.MouseEvent) {
-    if (!adding || !frameRef.current) return
-    const rect = frameRef.current.getBoundingClientRect()
-    const id = crypto.randomUUID()
-    setTags((t) => [
-      ...t,
-      {
-        id,
-        name: '',
-        source: 'manual',
-        x: (e.clientX - rect.left) / rect.width,
-        y: (e.clientY - rect.top) / rect.height,
-      },
-    ])
-    setAdding(false)
-    setEditingId(id) // open editor immediately so they can name it
-  }
-
   function rename(id: string, name: string) {
-    setTags((t) => t.map((tag) => (tag.id === id ? { ...tag, name } : tag)))
+    setManualTags((m) => m.map((t) => (t.id === id ? { ...t, name } : t)))
   }
-
   function remove(id: string) {
-    setTags((t) => t.filter((tag) => tag.id !== id))
+    setManualTags((m) => m.filter((t) => t.id !== id))
     setEditingId(null)
   }
 
-  const editing = tags.find((t) => t.id === editingId) || null
+  const manualByTrack = new Map(manualTags.filter((m) => m.trackId).map((m) => [m.trackId!, m]))
+  const editing = manualTags.find((m) => m.id === editingId) || null
 
   return (
     <div className="fixed inset-0 z-40 bg-black flex flex-col">
@@ -147,15 +231,11 @@ export function DemoScan({ onExit }: Props) {
         <button onClick={onExit} className="text-white px-3 py-2 rounded-md hover:bg-white/10" aria-label="Exit demo">
           ✕ Exit
         </button>
-        <span className="text-white/80 text-sm">Demo · {detector.mode}</span>
+        <span className="text-white/80 text-sm">Demo · {frozen ? 'Editing' : 'Scanning'}</span>
         <span className="w-16" />
       </div>
 
-      <div
-        ref={frameRef}
-        onClick={handleFrameClick}
-        className={`relative flex-1 overflow-hidden flex items-center justify-center ${adding ? 'cursor-crosshair' : ''}`}
-      >
+      <div className="relative flex-1 overflow-hidden flex items-center justify-center">
         {error ? (
           <div className="text-center text-rose-200 px-6">
             <p className="text-lg font-semibold mb-2">Couldn't open camera</p>
@@ -163,62 +243,90 @@ export function DemoScan({ onExit }: Props) {
           </div>
         ) : (
           <>
-            {/* Live camera (hidden once a frame is captured) */}
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              className={`max-h-full max-w-full object-contain ${captured ? 'hidden' : ''}`}
-            />
-            {/* Frozen frame for tagging */}
-            {captured && (
-              <img src={captured} alt="Captured frame" className="max-h-full max-w-full object-contain select-none" />
-            )}
+            {/* Media box — wrapper sizes to the media so tag % coords align. */}
+            <div
+              ref={wrapRef}
+              onClick={handleAddClick}
+              className={`relative inline-block ${adding ? 'cursor-crosshair' : ''}`}
+            >
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className={`block max-h-[78vh] max-w-full ${frozen ? 'hidden' : ''}`}
+              />
+              {frozen && <img src={frozen} alt="Captured frame" className="block max-h-[78vh] max-w-full select-none" />}
 
-            {/* Tags (only on the frozen frame). Tap to view / rename / delete. */}
-            {captured &&
-              tags.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setEditingId(t.id)
-                  }}
-                  style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%` }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 max-w-[45vw] px-2.5 py-1 rounded-full text-xs font-medium border whitespace-nowrap shadow-lg cursor-pointer ${
-                    t.source === 'ai'
-                      ? 'bg-teal-600/90 border-teal-300 text-white hover:bg-teal-500'
-                      : 'bg-blue-600/90 border-blue-300 text-white hover:bg-blue-500'
-                  }`}
+              {/* Tags: AI (teal) for tracks without a manual tag, manual (blue) otherwise */}
+              {tracks.map((t) => {
+                const m = manualByTrack.get(t.id)
+                const interactive = !!frozen
+                return (
+                  <button
+                    key={t.id}
+                    disabled={!interactive}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      tapTag(t, m ?? null)
+                    }}
+                    style={{ left: `${t.cx * 100}%`, top: `${t.cy * 100}%` }}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 max-w-[45vw] px-2.5 py-1 rounded-full text-xs font-medium border whitespace-nowrap shadow-lg ${
+                      m
+                        ? 'bg-blue-600/90 border-blue-300 text-white'
+                        : 'bg-teal-600/90 border-teal-300 text-white'
+                    } ${interactive ? 'cursor-pointer' : 'cursor-default'}`}
+                  >
+                    {m ? m.name || 'Untitled' : t.cls}
+                    {interactive && <span className="ml-1 opacity-80">✎</span>}
+                  </button>
+                )
+              })}
+
+              {/* Unanchored manual tags (no track to follow) */}
+              {manualTags
+                .filter((m) => !m.trackId || !tracks.find((t) => t.id === m.trackId))
+                .map((m) => (
+                  <button
+                    key={m.id}
+                    disabled={!frozen}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditingId(m.id)
+                    }}
+                    style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%` }}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 max-w-[45vw] px-2.5 py-1 rounded-full text-xs font-medium border whitespace-nowrap shadow-lg bg-blue-600/70 border-blue-300/70 text-white ${
+                      frozen ? 'cursor-pointer' : 'cursor-default'
+                    }`}
+                  >
+                    {m.name || 'Untitled'}
+                  </button>
+                ))}
+
+              {/* Editor popover */}
+              {editing && frozen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute -translate-x-1/2 z-30 flex items-center gap-1 bg-slate-900/95 border border-slate-500 rounded-lg p-1.5 shadow-lg"
+                  style={{ left: `${editing.x * 100}%`, top: `calc(${editing.y * 100}% + 18px)` }}
                 >
-                  {t.name || 'Untitled'} <span className="opacity-80">✎</span>
-                </button>
-              ))}
+                  <input
+                    autoFocus
+                    value={editing.name}
+                    onChange={(e) => rename(editing.id, e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && setEditingId(null)}
+                    placeholder="Name this object"
+                    className="px-2 py-1 rounded bg-slate-800 text-white text-xs w-36 focus:outline-none"
+                  />
+                  <button onClick={() => setEditingId(null)} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs">Done</button>
+                  <button onClick={() => remove(editing.id)} className="px-1.5 py-1 rounded text-rose-300 text-xs" aria-label="Delete tag">🗑</button>
+                </div>
+              )}
+            </div>
 
-            {/* Tag editor popover */}
-            {editing && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="absolute -translate-x-1/2 z-30 flex items-center gap-1 bg-slate-900/95 border border-slate-500 rounded-lg p-1.5 shadow-lg"
-                style={{ left: `${editing.x * 100}%`, top: `calc(${editing.y * 100}% + 18px)` }}
-              >
-                <input
-                  autoFocus
-                  value={editing.name}
-                  onChange={(e) => rename(editing.id, e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && setEditingId(null)}
-                  placeholder="Name this object"
-                  className="px-2 py-1 rounded bg-slate-800 text-white text-xs w-36 focus:outline-none"
-                />
-                <button onClick={() => setEditingId(null)} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs">Done</button>
-                <button onClick={() => remove(editing.id)} className="px-1.5 py-1 rounded text-rose-300 text-xs" aria-label="Delete tag">🗑</button>
-              </div>
-            )}
-
-            {busy && (
+            {loadingModel && !frozen && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/70 text-teal-200 text-xs px-3 py-1.5 rounded-full">
-                Loading AI model / recognizing…
+                Loading AI model…
               </div>
             )}
 
@@ -228,16 +336,13 @@ export function DemoScan({ onExit }: Props) {
                 <div className="max-w-sm text-center">
                   <h2 className="text-white text-lg font-semibold mb-2">Try the Scan concept</h2>
                   <p className="text-slate-300 text-sm leading-relaxed mb-4">
-                    Aim at the room and tap <span className="text-teal-300 font-medium">Capture</span>.
-                    The on-device AI tags a few objects it recognizes (teal). Then tap any tag to
-                    rename or remove it, or use <span className="text-blue-300 font-medium">+ Add tag</span>
-                    {' '}to label what it missed — just like identifying aircraft components in the real app.
+                    Scan the room — the on-device AI labels objects it recognizes (teal) and the
+                    labels follow them. Tap <span className="text-teal-300 font-medium">Capture</span>
+                    {' '}to pause and add or rename tags; a tag you add (blue) sticks to its object
+                    when you keep scanning — just like aircraft components in the real app.
                   </p>
-                  <button
-                    onClick={() => setShowIntro(false)}
-                    className="px-5 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium text-sm"
-                  >
-                    Got it
+                  <button onClick={() => setShowIntro(false)} className="px-5 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium text-sm">
+                    Start scanning
                   </button>
                 </div>
               </div>
@@ -249,13 +354,9 @@ export function DemoScan({ onExit }: Props) {
       {/* Bottom controls */}
       {!error && !showIntro && (
         <div className="px-4 py-3 bg-black/70 flex items-center justify-center gap-3">
-          {!captured ? (
-            <button
-              onClick={capture}
-              disabled={busy}
-              className="px-6 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-medium text-sm"
-            >
-              {busy ? 'Recognizing…' : '◉ Capture'}
+          {!frozen ? (
+            <button onClick={capture} className="px-6 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-medium text-sm">
+              ◉ Capture to add / edit tags
             </button>
           ) : (
             <>
@@ -268,10 +369,9 @@ export function DemoScan({ onExit }: Props) {
               >
                 {adding ? 'Tap the object…' : '+ Add tag'}
               </button>
-              <button onClick={rescan} className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium">
-                ↻ Rescan
+              <button onClick={resume} className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-sm font-medium">
+                ✓ Resume scanning
               </button>
-              <span className="text-xs text-slate-400">Teal = AI · Blue = yours · tap to edit</span>
             </>
           )}
         </div>

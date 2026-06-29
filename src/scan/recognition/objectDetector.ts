@@ -11,9 +11,6 @@
 
 import { Detector, Detection } from './detector'
 
-// To showcase the manual-tagging step, we deliberately surface only the top
-// ~25% most-confident detections and leave the rest for the user to tag.
-const SURFACE_FRACTION = 0.25
 const MIN_SCORE = 0.5
 
 // COCO label → Title Case ("cell phone" → "Cell Phone").
@@ -55,21 +52,19 @@ export function createObjectDetector(): Detector {
       const model = await loadModel()
       const raw = await model.detect(frame)
 
-      const confident = raw
+      // Return all confident detections (normalized). The demo tracks these
+      // across frames so AI labels — and manual tags anchored to them — follow
+      // their objects live.
+      return raw
         .filter((p) => p.score >= MIN_SCORE)
-        .sort((a, b) => b.score - a.score)
-
-      // Cap to ~25% (at least one) so most objects are left for manual tagging.
-      const keep = Math.max(1, Math.ceil(confident.length * SURFACE_FRACTION))
-
-      return confident.slice(0, keep).map((p) => {
-        const [x, y, bw, bh] = p.bbox
-        return {
-          classLabel: prettify(p.class),
-          confidence: p.score,
-          bbox: { x: x / w, y: y / h, width: bw / w, height: bh / h }, // normalize
-        } satisfies Detection
-      })
+        .map((p) => {
+          const [x, y, bw, bh] = p.bbox
+          return {
+            classLabel: prettify(p.class),
+            confidence: p.score,
+            bbox: { x: x / w, y: y / h, width: bw / w, height: bh / h }, // normalize
+          } satisfies Detection
+        })
     },
   }
 }
