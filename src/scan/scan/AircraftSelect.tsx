@@ -14,6 +14,7 @@ import { createGuidedDetector } from '../recognition/guidedDetector'
 import { Detector } from '../recognition/detector'
 import { CameraScan } from './CameraScan'
 import { ReferenceScan } from './ReferenceScan'
+import { DemoScan } from './DemoScan'
 
 type Launch =
   | { mode: 'camera'; detector: Detector; detectionMap: Map<string, ScanComponent> }
@@ -25,6 +26,7 @@ export function AircraftSelect() {
   const [aircraft, setAircraft] = useState<string | null>(null)
   const [launch, setLaunch] = useState<Launch | null>(null)
   const [starting, setStarting] = useState(false)
+  const [demo, setDemo] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -60,6 +62,10 @@ export function AircraftSelect() {
     }
   }
 
+  if (demo) {
+    return <DemoScan onExit={() => setDemo(false)} />
+  }
+
   if (launch) {
     return launch.mode === 'reference' ? (
       <ReferenceScan data={launch.data} onExit={() => setLaunch(null)} />
@@ -80,6 +86,17 @@ export function AircraftSelect() {
     <div className="px-5 py-6 max-w-lg mx-auto w-full">
       {!aircraft ? (
         <>
+          {/* Demo/tutorial — on-device room scan, no aircraft or sign-in needed */}
+          <button
+            onClick={() => setDemo(true)}
+            className="w-full text-left p-4 mb-5 rounded-xl bg-teal-900/40 border border-teal-700 hover:border-teal-400 transition"
+          >
+            <p className="text-teal-200 font-medium">Try a live demo — scan a room</p>
+            <p className="text-xs text-teal-400/80 mt-0.5">
+              On-device AI tags everyday objects; add your own tags to the rest.
+            </p>
+          </button>
+
           <h2 className="text-sm uppercase tracking-wide text-slate-500 mb-3">Select aircraft</h2>
           {aircraftList.length === 0 ? (
             <p className="text-slate-500 text-sm">No aircraft configured yet.</p>
