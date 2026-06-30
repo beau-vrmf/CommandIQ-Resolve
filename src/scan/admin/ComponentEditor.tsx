@@ -47,6 +47,8 @@ export function ComponentEditor({ component, onBack }: Props) {
     animation_links: toLines(component.animation_links),
     label_type: component.label_type as ScanLabelType,
     content_owner: component.content_owner ?? '',
+    part_number: component.part_number ?? '',
+    ocr_terms: toLines(component.ocr_terms),
   })
   const [saving, setSaving] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
@@ -77,6 +79,8 @@ export function ComponentEditor({ component, onBack }: Props) {
         animation_links: fromLines(form.animation_links),
         label_type: form.label_type,
         content_owner: form.content_owner || null,
+        part_number: form.part_number || null,
+        ocr_terms: fromLines(form.ocr_terms),
       })
       setSavedId(saved.id)
       return saved
@@ -146,6 +150,11 @@ export function ComponentEditor({ component, onBack }: Props) {
 
       <ListArea label="Alternate names (one per line)" value={form.alternate_names} onChange={(v) => set('alternate_names', v)} />
       <ListArea label="Related components (one per line)" value={form.related_components} onChange={(v) => set('related_components', v)} />
+      <Field label="Part number">
+        <input className="input" value={form.part_number} onChange={(e) => set('part_number', e.target.value)} />
+      </Field>
+      <ListArea label="OCR match terms (one per line — printed placard text that should match this component)" value={form.ocr_terms} onChange={(v) => set('ocr_terms', v)} />
+
       <ListArea label="Technical order refs (one per line)" value={form.to_refs} onChange={(v) => set('to_refs', v)} />
       <ListArea label="Job guide refs (one per line)" value={form.job_guide_refs} onChange={(v) => set('job_guide_refs', v)} />
       <ListArea label="IMI links (one URL per line)" value={form.imi_links} onChange={(v) => set('imi_links', v)} />

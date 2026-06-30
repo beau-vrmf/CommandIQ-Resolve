@@ -32,6 +32,10 @@ export interface ScanComponent {
   validation_status: ScanValidationStatus
   content_owner: string | null
   is_published: boolean
+  // OCR recognition: a part number and the printed terms that should match this
+  // component when read off a placard.
+  part_number: string | null
+  ocr_terms: string[] | null
   updated_at: string
   created_at: string
 }
@@ -100,6 +104,16 @@ export async function getPublishedComponents(
     .eq('aircraft', aircraft)
     .eq('area', area)
     .order('name', { ascending: true })
+  if (error) throw error
+  return (data || []) as ScanComponent[]
+}
+
+// Published catalog for OCR matching. Optionally scoped to an aircraft/area.
+export async function getCatalog(aircraft?: string, area?: string): Promise<ScanComponent[]> {
+  let query = supabase.from('scan_components').select('*').eq('is_published', true)
+  if (aircraft) query = query.eq('aircraft', aircraft)
+  if (area) query = query.eq('area', area)
+  const { data, error } = await query.limit(500)
   if (error) throw error
   return (data || []) as ScanComponent[]
 }

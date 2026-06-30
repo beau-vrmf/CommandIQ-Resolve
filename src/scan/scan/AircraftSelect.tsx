@@ -15,6 +15,7 @@ import { Detector } from '../recognition/detector'
 import { CameraScan } from './CameraScan'
 import { ReferenceScan } from './ReferenceScan'
 import { DemoScan } from './DemoScan'
+import { OcrScan } from './OcrScan'
 
 type Launch =
   | { mode: 'camera'; detector: Detector; detectionMap: Map<string, ScanComponent> }
@@ -27,6 +28,7 @@ export function AircraftSelect() {
   const [launch, setLaunch] = useState<Launch | null>(null)
   const [starting, setStarting] = useState(false)
   const [demo, setDemo] = useState(false)
+  const [ocr, setOcr] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -66,6 +68,10 @@ export function AircraftSelect() {
     return <DemoScan onExit={() => setDemo(false)} />
   }
 
+  if (ocr) {
+    return <OcrScan onExit={() => setOcr(false)} />
+  }
+
   if (launch) {
     return launch.mode === 'reference' ? (
       <ReferenceScan data={launch.data} onExit={() => setLaunch(null)} />
@@ -94,6 +100,17 @@ export function AircraftSelect() {
             <p className="text-teal-200 font-medium">Try a live demo — scan a room</p>
             <p className="text-xs text-teal-400/80 mt-0.5">
               On-device AI tags everyday objects; add your own tags to the rest.
+            </p>
+          </button>
+
+          {/* OCR placard scan (beta) — reads printed text, matches the catalog */}
+          <button
+            onClick={() => setOcr(true)}
+            className="w-full text-left p-4 mb-5 rounded-xl bg-emerald-900/40 border border-emerald-700 hover:border-emerald-400 transition"
+          >
+            <p className="text-emerald-200 font-medium">Scan a placard / part number (OCR — beta)</p>
+            <p className="text-xs text-emerald-400/80 mt-0.5">
+              Capture a photo; reads the printed text and matches your component catalog.
             </p>
           </button>
 

@@ -60,6 +60,8 @@ export function ComponentManager() {
       validation_status: 'draft',
       content_owner: null,
       is_published: false,
+      part_number: null,
+      ocr_terms: null,
       updated_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
     }
