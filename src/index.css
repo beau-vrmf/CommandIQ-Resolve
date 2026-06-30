@@ -16,3 +16,10 @@ button {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
+
+@layer components {
+  /* Shared form control used by CommandIQ Scan editors. */
+  .input {
+    @apply w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm;
+  }
+}

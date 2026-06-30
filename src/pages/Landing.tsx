@@ -87,6 +87,31 @@ export function Landing() {
             <span className="text-xs text-slate-500">Sign-in required</span>
           </div>
         </button>
+
+        {/* CommandIQ Scan — Component Recognition */}
+        <button
+          onClick={() => navigate('/scan')}
+          className="text-left p-6 bg-slate-800 border border-slate-700 hover:border-emerald-500 rounded-2xl transition group"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-emerald-900/50 border border-emerald-700 flex items-center justify-center text-xl mb-3">
+                📷
+              </div>
+              <h2 className="text-lg font-semibold text-white group-hover:text-emerald-300 transition">
+                CommandIQ Scan
+              </h2>
+              <p className="text-sm text-slate-400 mt-1 leading-relaxed">
+                Identify aircraft components with the camera and open related training content, references, and safety notes.
+              </p>
+            </div>
+            <span className="text-slate-500 group-hover:text-emerald-400 transition text-xl flex-shrink-0 mt-1">→</span>
+          </div>
+          <div className="mt-4 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            <span className="text-xs text-slate-500">No sign-in required</span>
+          </div>
+        </button>
       </div>
 
     </div>

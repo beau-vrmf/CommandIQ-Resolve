@@ -6,6 +6,7 @@ import { Session } from './pages/Session'
 import { Outcome } from './pages/Outcome'
 import { History } from './pages/History'
 import { OjtApp } from './ojt/OjtApp'
+import { ScanApp } from './scan/ScanApp'
 
 export const router = createBrowserRouter([
   {
@@ -23,4 +24,7 @@ export const router = createBrowserRouter([
   // OJT Upgrade Training — standalone, no shared shell
   { path: '/ojt', element: <OjtApp /> },
   { path: '/ojt/*', element: <OjtApp /> },
+  // CommandIQ Scan — public scan/browse, authed admin/SME
+  { path: '/scan', element: <ScanApp /> },
+  { path: '/scan/*', element: <ScanApp /> },
 ])

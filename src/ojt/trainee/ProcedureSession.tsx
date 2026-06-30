@@ -256,25 +256,6 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
         {/* Instruction */}
         <p className="text-base text-white leading-relaxed mb-5">{step.instruction}</p>
 
-        {/* Reference image */}
-        {imageUrl && (
-          <div className="mb-5">
-            <button
-              onClick={() => setShowImage(!showImage)}
-              className="text-xs text-violet-400 hover:text-violet-300 underline mb-2"
-            >
-              {showImage ? 'Hide reference image' : 'Show reference image'}
-            </button>
-            {showImage && (
-              <img
-                src={imageUrl}
-                alt="Step reference"
-                className="w-full rounded-xl border border-slate-700 object-contain max-h-64"
-              />
-            )}
-          </div>
-        )}
-
         {/* Photo capture */}
         {step.photo_required && (
           <div className="mb-5 p-4 bg-slate-800 border border-slate-700 rounded-xl">
@@ -379,26 +360,50 @@ export function ProcedureSession({ procedure, steps, submission, onComplete, onB
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
-                  { value: 'complete' as ConfirmationType, label: 'Complete', color: 'green' },
-                  { value: 'not_complete' as ConfirmationType, label: 'Not Complete', color: 'red' },
-                  { value: 'need_assistance' as ConfirmationType, label: 'Need Assistance', color: 'amber' },
-                  { value: 'not_applicable' as ConfirmationType, label: 'Not Applicable', color: 'slate' },
+                  { kind: 'confirm', value: 'complete' as ConfirmationType, label: 'Complete', color: 'green' },
+                  { kind: 'confirm', value: 'need_assistance' as ConfirmationType, label: 'Need Assistance', color: 'amber' },
+                  { kind: 'hint', label: '💡 Hint', color: 'violet' },
+                  { kind: 'confirm', value: 'not_applicable' as ConfirmationType, label: 'Not Applicable', color: 'slate' },
                 ] as const
-              ).map(({ value, label, color }) => (
-                <button
-                  key={value}
-                  onClick={() => handleConfirm(value)}
-                  disabled={saving || confirmed || !canConfirm()}
-                  className={`py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors disabled:opacity-40 ${
-                    response?.confirmation === value
-                      ? colorSelected[color]
-                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+              ).map((btn) => {
+                const base = 'py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors disabled:opacity-40'
+                const unselected = 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'
+                if (btn.kind === 'hint') {
+                  // Hint reveals the step's reference image inline; it isn't a
+                  // confirmation. Greyed out when the step has no reference image.
+                  return (
+                    <button
+                      key="hint"
+                      onClick={() => setShowImage((v) => !v)}
+                      disabled={!imageUrl}
+                      className={`${base} ${showImage ? colorSelected[btn.color] : unselected}`}
+                    >
+                      {btn.label}
+                    </button>
+                  )
+                }
+                return (
+                  <button
+                    key={btn.value}
+                    onClick={() => handleConfirm(btn.value)}
+                    disabled={saving || confirmed || !canConfirm()}
+                    className={`${base} ${
+                      response?.confirmation === btn.value ? colorSelected[btn.color] : unselected
+                    }`}
+                  >
+                    {btn.label}
+                  </button>
+                )
+              })}
             </div>
+            {/* Hint: step reference image, revealed inline below the grid */}
+            {showImage && imageUrl && (
+              <img
+                src={imageUrl}
+                alt="Step reference"
+                className="mt-3 w-full rounded-xl border border-slate-700 object-contain max-h-64"
+              />
+            )}
             {step.photo_required && !response?.photo_path && (
               <p className="text-xs text-amber-400 mt-2">📸 Capture the required photo before confirming</p>
             )}
@@ -482,4 +487,5 @@ const colorSelected: Record<string, string> = {
   red: 'bg-red-800 border-red-700 text-white',
   amber: 'bg-amber-800 border-amber-700 text-white',
   slate: 'bg-slate-700 border-slate-600 text-white',
+  violet: 'bg-violet-700 border-violet-600 text-white',
 }
